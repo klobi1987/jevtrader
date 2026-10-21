@@ -911,6 +911,58 @@ body {
   font-weight: 700 !important;
 }
 
+/* MTF Matrix Component */
+.mtf-matrix-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mtf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-glass);
+}
+
+.mtf-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.mtf-dot.emerald-dot {
+  background: var(--emerald-neon);
+  box-shadow: 0 0 6px var(--emerald-neon);
+}
+
+.mtf-dot.crimson-dot {
+  background: var(--crimson-neon);
+  box-shadow: 0 0 6px var(--crimson-neon);
+}
+
+.mtf-dot.amber-dot {
+  background: var(--amber-neon);
+}
+
+.veto-tag {
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.3);
+  letter-spacing: 0.04em;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .app-header {

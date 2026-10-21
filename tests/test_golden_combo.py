@@ -1,4 +1,4 @@
-"""Unit tests for Golden Combo: Negative Funding Squeeze and Breakout Confluence."""
+"""Unit tests for Golden Combo: Negative Funding Squeeze, Breakout, and MTF Hard Veto."""
 
 import pytest
 from jev.contracts import TradeDirection, ConfluenceFactors
@@ -18,14 +18,43 @@ def test_negative_funding_squeeze_scoring():
         dist_to_vwap_bps=20.0,             # 10.0 pts ideal entry
         atr_15m_pct=1.8,                   # 5.0 pts healthy ATR
         is_squeeze_breakout=True,          # 10.0 pts breakout
-        funding_rate=-0.0012               # Extreme negative funding (-0.12% / 8h) -> +15.0 pts
+        funding_rate=-0.0012,              # Extreme negative funding (-0.12% / 8h) -> +15.0 pts
+        mtf_aligned=True,                  # +20.0 pts
+        htf_conflict=False
     )
 
     score_res = engine.calculate_score("SQUEEZEUSDT", TradeDirection.LONG, base_factors)
-    # Expected: 12.5 + 12.5 + 6.0 + 8.0 + (10.0+5.0) + (10.0+5.0) + 15.0 = 84.0 pts
     assert score_res.total_score >= 80.0
     assert score_res.is_qualified is True
     assert score_res.is_high_conviction is True
+
+def test_htf_hard_veto_blocks_trade():
+    """Verify that a 1H reversal/dump instantly vetoes a trade even with good 15m stats (IOST/CVX protection)."""
+    engine = ConfluenceEngine(min_threshold=70.0, high_conviction_threshold=83.0)
+
+    veto_factors = ConfluenceFactors(
+        relative_strength_vs_btc_pct=40.0, # Looks amazing on 24h
+        volume_24h_usd=50_000_000.0,
+        taker_buy_ratio=0.75,
+        orderbook_imbalance_top20=0.40,
+        wall_distance_pct=0.05,
+        wall_volume_usd=1_000_000.0,
+        dist_to_vwap_bps=10.0,
+        atr_15m_pct=2.0,
+        is_squeeze_breakout=True,
+        funding_rate=-0.0020,
+        tf_1h_trend="DUMPING",
+        tf_1h_change_pct=-4.5,
+        tf_5m_trend="BEAR",
+        mtf_aligned=False,
+        htf_conflict=True # 1H is crashing!
+    )
+
+    score_res = engine.calculate_score("IOSTUSDT", TradeDirection.LONG, veto_factors)
+    # Must be 100% BLOCKED
+    assert score_res.total_score == 0.0
+    assert score_res.is_qualified is False
+    assert score_res.is_high_conviction is False
 
 def test_short_funding_cascade_scoring():
     engine = ConfluenceEngine(min_threshold=70.0, high_conviction_threshold=83.0)
@@ -41,7 +70,11 @@ def test_short_funding_cascade_scoring():
         dist_to_vwap_bps=-30.0,
         atr_15m_pct=2.1,
         is_squeeze_breakout=True,
-        funding_rate=+0.0015               # Extreme positive funding (+0.15% / 8h) -> +15.0 pts
+        funding_rate=+0.0015,              # Extreme positive funding (+0.15% / 8h) -> +15.0 pts
+        tf_1h_trend="BEAR",
+        tf_5m_trend="BEAR",
+        mtf_aligned=True,
+        htf_conflict=False
     )
 
     score_res = engine.calculate_score("BLEEDUSDT", TradeDirection.SHORT, short_factors)
@@ -51,5 +84,6 @@ def test_short_funding_cascade_scoring():
 
 if __name__ == "__main__":
     test_negative_funding_squeeze_scoring()
+    test_htf_hard_veto_blocks_trade()
     test_short_funding_cascade_scoring()
-    print("All Golden Combo tests PASSED successfully!")
+    print("All Golden Combo + MTF Veto tests PASSED successfully!")

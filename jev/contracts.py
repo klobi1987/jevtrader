@@ -46,8 +46,13 @@ class ConfluenceFactors:
     wall_volume_usd: float               # Size of supporting wall
     dist_to_vwap_bps: float              # Basis points to 15m VWAP
     atr_15m_pct: float                   # Volatility %
-    is_squeeze_breakout: bool            # True if breaking out of ATR compression
+    is_squeeze_breakout: bool = False    # True if breaking out of ATR compression
     funding_rate: float = 0.0            # 8h funding rate (negative = shorts pay longs)
+    tf_1h_trend: str = "NEUTRAL"         # "BULL", "BEAR", "DUMPING", "REVERSAL"
+    tf_1h_change_pct: float = 0.0        # Current 1h candle change %
+    tf_5m_trend: str = "NEUTRAL"         # "BULL", "BEAR", "CURLING_UP"
+    mtf_aligned: bool = False            # True if 1h, 15m, 5m all align with direction
+    htf_conflict: bool = False           # True if 1h is opposing or dumping against direction
 
 @dataclass
 class ConfluenceScore:

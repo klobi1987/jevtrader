@@ -98,10 +98,27 @@ class ConfluenceEngine:
                 score += 15.0
             elif fr >= 0.0005:
                 score += 10.0
-            elif fr >= 0.0002:
-                score += 6.0
             elif fr > 0.0001:
                 score += 3.0
+
+        # Factor 7: Multi-Timeframe Alignment & Hard Veto (Astra/Argon Gate)
+        if getattr(factors, "htf_conflict", False):
+            # HARD VETO: 1H is in a dump, reversal, or opposing trend!
+            # Immediate disqualification to prevent catching falling knives.
+            return ConfluenceScore(
+                symbol=symbol,
+                direction=direction,
+                total_score=0.0,
+                factors=factors,
+                is_qualified=False,
+                is_high_conviction=False
+            )
+
+        if getattr(factors, "mtf_aligned", False):
+            # Perfect alignment across 5m, 15m, and 1h gives massive edge!
+            score += 20.0
+        elif getattr(factors, "tf_1h_trend", "") == ("BULL" if direction == TradeDirection.LONG else "BEAR"):
+            score += 10.0
 
         total_score = round(min(100.0, max(0.0, score)), 2)
         is_qualified = total_score >= self.min_threshold

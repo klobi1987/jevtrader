@@ -332,6 +332,13 @@ function renderScannerFeed(candidates) {
     const fr = c.funding_rate !== undefined ? c.funding_rate : 0.0;
     const isSqueeze = c.is_squeeze_breakout || false;
 
+    const h1Trend = c.tf_1h_trend || 'NEUTRAL';
+    const m5Trend = c.tf_5m_trend || 'NEUTRAL';
+    const h1Color = h1Trend === 'BULL' ? 'emerald-dot' : (h1Trend === 'DUMPING' || h1Trend === 'BEAR' ? 'crimson-dot' : 'amber-dot');
+    const m5Color = m5Trend === 'BULL' ? 'emerald-dot' : (m5Trend === 'BEAR' ? 'crimson-dot' : 'amber-dot');
+    const h1Change = c.tf_1h_change_pct !== undefined ? (c.tf_1h_change_pct >= 0 ? '+' : '') + c.tf_1h_change_pct.toFixed(1) + '%' : '';
+    const hasVeto = c.htf_conflict === true;
+
     html += `
       <tr>
         <td class="mono-font">
@@ -348,6 +355,13 @@ function renderScannerFeed(candidates) {
             </div>
           </div>
         </td>
+        <td>
+          <div class="mtf-matrix-wrap" title="1H: ${h1Trend} ${h1Change} | 5M: ${m5Trend}">
+            <span class="mtf-badge"><span class="mtf-dot ${h1Color}"></span>1H</span>
+            <span class="mtf-badge"><span class="mtf-dot ${m5Color}"></span>5M</span>
+            ${hasVeto ? '<span class="veto-tag">⛔ VETO</span>' : ''}
+          </div>
+        </td>
         <td class="mono-font ${fr < 0 ? 'emerald-text' : (fr > 0.05 ? 'crimson-text' : '')}">
           ${(fr >= 0 ? '+' : '')}${fr.toFixed(4)}%
         </td>
@@ -360,8 +374,8 @@ function renderScannerFeed(candidates) {
         </td>
         <td class="mono-font">${c.wall_distance_pct.toFixed(2)}%</td>
         <td>
-          <span class="empty-tag ${score >= 80 ? 'high-conviction-tag' : (c.is_qualified ? 'emerald-text' : '')}">
-            ${score >= 80 ? '🔥 CONVICTION' : (c.is_qualified ? 'QUALIFIED (≥70)' : 'EVALUATING')}
+          <span class="empty-tag ${hasVeto ? 'crimson-text' : (score >= 80 ? 'high-conviction-tag' : (c.is_qualified ? 'emerald-text' : ''))}">
+            ${hasVeto ? '⛔ 1H VETO' : (score >= 80 ? '🔥 CONVICTION' : (c.is_qualified ? 'QUALIFIED (≥70)' : 'EVALUATING'))}
           </span>
         </td>
       </tr>
