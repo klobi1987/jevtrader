@@ -16,12 +16,17 @@ class MarketScanner:
         self.bull_threshold = float(bull_threshold)
         self.bear_threshold = float(bear_threshold)
         self.min_turnover_usd = float(min_turnover_usd)
-        # Tiered MTF Caches (Optimized per timeframe duration):
-        self.cache_5m: Dict[str, Tuple[float, Any]] = {}   # TTL = 30s
-        self.cache_15m: Dict[str, Tuple[float, Any]] = {}  # TTL = 90s
-        self.cache_60m: Dict[str, Tuple[float, Any]] = {}  # TTL = 300s (5m)
-        self.kline_cache: Dict[str, Tuple[float, float, float, bool, str, float, str, bool, bool]] = {}
-        self.pool = ThreadPoolExecutor(max_workers=12)
+        
+        # Timeframe-Aware Event-Driven Kline Caches:
+        # 4H cache: symbol -> (boundary_ts, open_price, ema20, last_fetch_time)
+        self.cache_4h: Dict[str, Tuple[float, float, float, float]] = {}
+        # 1H cache: symbol -> (boundary_ts, open_price, ema20, has_upper_wick_rejection, last_fetch_time)
+        self.cache_1h: Dict[str, Tuple[float, float, float, bool, float]] = {}
+        # 15M cache: symbol -> (last_fetch_time, klines_15) (TTL = 90s)
+        self.cache_15m: Dict[str, Tuple[float, Any]] = {}
+        # 5M cache: symbol -> (last_fetch_time, klines_5) (TTL = 30s)
+        self.cache_5m: Dict[str, Tuple[float, Any]] = {}
+        self.pool = ThreadPoolExecutor(max_workers=14)
 
     def scan_universe(self) -> Tuple[MarketBreadthState, List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
@@ -97,7 +102,6 @@ class MarketScanner:
         )
 
         # 4. Rank Candidates by Relative Strength vs BTC + Funding Squeeze Fuel
-        # Long candidates: highest RS + bonus if shorts are paying funding (negative funding rate)
         top_longs_candidates = sorted(
             valid_usdt_pairs,
             key=lambda x: x["rs_vs_btc"] + (abs(x["funding_rate"]) * 50.0 if x["funding_rate"] < -0.0002 else 0.0),
@@ -105,7 +109,6 @@ class MarketScanner:
         )
         top_longs = top_longs_candidates[:12]
 
-        # Short candidates: weakest RS + bonus if longs are paying funding (positive funding rate)
         top_shorts_candidates = sorted(
             valid_usdt_pairs,
             key=lambda x: x["rs_vs_btc"] - (x["funding_rate"] * 50.0 if x["funding_rate"] > 0.0002 else 0.0)
@@ -116,8 +119,9 @@ class MarketScanner:
 
     def fetch_microstructure_telemetry(self, symbol: str, rs_vs_btc_pct: float, turnover_usd: float, is_short: bool = False, funding_rate: float = 0.0) -> Optional[ConfluenceFactors]:
         """
-        Pulls 50-level orderbook, recent trades concurrently in parallel (100ms total).
-        Uses 3-minute in-memory cache for 15m klines to minimize network overhead.
+        Pulls 50-level orderbook and recent trades in parallel.
+        Optimized HTF caching: 4H and 1H klines are cached until candle boundary (when they change).
+        During candle lifetime, 4H and 1H trends are evaluated dynamically against real-time price in 0ms.
         """
         try:
             now = time.time()
@@ -126,155 +130,96 @@ class MarketScanner:
             f_book = self.pool.submit(self.client.get_orderbook, symbol, 50)
             f_trades = self.pool.submit(self.client.get_recent_trades, symbol, 100)
 
-            # 2. Check Tiered MTF Kline Caches (Per-Timeframe Smart Expiry)
-            # 1H klines: 300s TTL (5 min) - candle moves slowly, only refreshed on macro updates
-            cached_60m = self.cache_60m.get(symbol)
-            if cached_60m and (now - cached_60m[0] < 300.0):
-                f_k60 = None
-                klines_60 = cached_60m[1]
-            else:
-                f_k60 = self.pool.submit(self.client.get_klines, symbol, "60", 12)
+            # 2. Check 4H Kline Cache (boundary-aware: only refresh when 4H candle closes or missing)
+            cached_4h = self.cache_4h.get(symbol)
+            f_k4h = None
+            if not cached_4h or now >= cached_4h[0] or (now - cached_4h[3] > 14400.0):
+                f_k4h = self.pool.submit(self.client.get_klines, symbol, "240", 12)
 
-            # 15M klines: 90s TTL
+            # 3. Check 1H Kline Cache (boundary-aware: refresh at hour boundary or 15m mid-hour sync)
+            cached_1h = self.cache_1h.get(symbol)
+            f_k1h = None
+            if not cached_1h or now >= cached_1h[0] or (now - cached_1h[4] > 900.0):
+                f_k1h = self.pool.submit(self.client.get_klines, symbol, "60", 12)
+
+            # 4. Check 15M Kline Cache (TTL = 90s)
             cached_15m = self.cache_15m.get(symbol)
+            klines_15 = None
+            f_k15 = None
             if cached_15m and (now - cached_15m[0] < 90.0):
-                f_k15 = None
                 klines_15 = cached_15m[1]
             else:
                 f_k15 = self.pool.submit(self.client.get_klines, symbol, "15", 20)
 
-            # 5M klines: 30s TTL
+            # 5. Check 5M Kline Cache (TTL = 30s)
             cached_5m = self.cache_5m.get(symbol)
+            klines_5 = None
+            f_k5 = None
             if cached_5m and (now - cached_5m[0] < 30.0):
-                f_k5 = None
                 klines_5 = cached_5m[1]
             else:
                 f_k5 = self.pool.submit(self.client.get_klines, symbol, "5", 12)
 
-            # Resolve any pending futures and update per-timeframe caches
-            if f_k60:
-                klines_60 = f_k60.result(timeout=4)
-                self.cache_60m[symbol] = (now, klines_60)
+            # Resolve any pending Kline futures
+            if f_k4h:
+                try:
+                    klines_4h = f_k4h.result(timeout=4)
+                    if klines_4h and len(klines_4h) >= 5:
+                        rev_4h = list(reversed(klines_4h))
+                        open_4h = float(rev_4h[-1][1])
+                        closes_4h = [float(k[4]) for k in rev_4h]
+                        ema20_4h = closes_4h[0]
+                        m20_4 = 2.0 / (len(closes_4h) + 1)
+                        for c in closes_4h[1:]:
+                            ema20_4h = (c - ema20_4h) * m20_4 + ema20_4h
+                        candle_start_4h = int(rev_4h[-1][0])
+                        boundary_4h = (candle_start_4h / 1000.0) + 14400.0
+                        cached_4h = (boundary_4h, open_4h, ema20_4h, now)
+                        self.cache_4h[symbol] = cached_4h
+                except Exception as e:
+                    logger.debug(f"4H kline fetch failed for {symbol}: {e}")
+
+            if f_k1h:
+                try:
+                    klines_1h = f_k1h.result(timeout=4)
+                    if klines_1h and len(klines_1h) >= 5:
+                        rev_1h = list(reversed(klines_1h))
+                        open_1h = float(rev_1h[-1][1])
+                        closes_1h = [float(k[4]) for k in rev_1h]
+                        opens_1h = [float(k[1]) for k in rev_1h]
+                        highs_1h = [float(k[2]) for k in rev_1h]
+                        ema20_1h = closes_1h[0]
+                        m20_1 = 2.0 / (len(closes_1h) + 1)
+                        for c in closes_1h[1:]:
+                            ema20_1h = (c - ema20_1h) * m20_1 + ema20_1h
+
+                        has_wick_rejection = False
+                        if len(highs_1h) >= 2:
+                            prev_body = abs(closes_1h[-2] - opens_1h[-2])
+                            prev_wick = highs_1h[-2] - max(closes_1h[-2], opens_1h[-2])
+                            if prev_wick > max(0.00001, prev_body * 1.5):
+                                has_wick_rejection = True
+
+                        candle_start_1h = int(rev_1h[-1][0])
+                        boundary_1h = (candle_start_1h / 1000.0) + 3600.0
+                        cached_1h = (boundary_1h, open_1h, ema20_1h, has_wick_rejection, now)
+                        self.cache_1h[symbol] = cached_1h
+                except Exception as e:
+                    logger.debug(f"1H kline fetch failed for {symbol}: {e}")
+
             if f_k15:
-                klines_15 = f_k15.result(timeout=4)
-                self.cache_15m[symbol] = (now, klines_15)
+                try:
+                    klines_15 = f_k15.result(timeout=4)
+                    self.cache_15m[symbol] = (now, klines_15)
+                except Exception as e:
+                    logger.debug(f"15M kline fetch failed for {symbol}: {e}")
+
             if f_k5:
-                klines_5 = f_k5.result(timeout=4)
-                self.cache_5m[symbol] = (now, klines_5)
-
-                atr_pct = 1.0
-                dist_to_vwap_bps = 15.0
-                is_squeeze = False
-                tf_1h_trend = "NEUTRAL"
-                tf_1h_change_pct = 0.0
-                tf_5m_trend = "NEUTRAL"
-                mtf_aligned = False
-                htf_conflict = False
-
-                # A. Process 15m klines
-                consecutive_red_15m = 0
-                if klines_15 and len(klines_15) >= 10:
-                    rev_klines = list(reversed(klines_15))
-                    closes = [float(k[4]) for k in rev_klines]
-                    opens = [float(k[1]) for k in rev_klines]
-                    highs = [float(k[2]) for k in rev_klines]
-                    lows = [float(k[3]) for k in rev_klines]
-
-                    for c_b, o_b in zip(reversed(closes), reversed(opens)):
-                        if c_b < o_b:
-                            consecutive_red_15m += 1
-                        else:
-                            break
-
-                    tr_list = []
-                    for i in range(1, len(rev_klines)):
-                        h = highs[i]
-                        l = lows[i]
-                        prev_c = closes[i - 1]
-                        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
-                        tr_list.append(tr)
-
-                    atr = sum(tr_list[-14:]) / min(14, len(tr_list)) if tr_list else (highs[-1] - lows[-1])
-                    current_price = closes[-1]
-                    atr_pct = (atr / current_price) * 100 if current_price > 0 else 1.0
-
-                    cum_vol = sum(float(k[5]) for k in rev_klines)
-                    cum_turnover = sum(float(k[6]) for k in rev_klines)
-                    vwap = cum_turnover / cum_vol if cum_vol > 0 else current_price
-                    dist_to_vwap_bps = (current_price - vwap) / vwap * 10000
-
-                    median_tr = sorted(tr_list)[len(tr_list) // 2] if tr_list else atr
-                    prior_bars = tr_list[-5:-1] if len(tr_list) >= 5 else tr_list[:-1]
-                    prior_avg_tr = sum(prior_bars) / len(prior_bars) if prior_bars else median_tr
-                    is_compressed = prior_avg_tr <= median_tr * 0.90
-                    is_expanding = tr_list[-1] >= median_tr * 1.10
-                    is_squeeze = (is_compressed and is_expanding) or (tr_list[-1] <= median_tr * 0.70)
-
-                # B. Process 1h klines (HTF Permission & Conflict Filter)
-                if klines_60 and len(klines_60) >= 5:
-                    rev_60 = list(reversed(klines_60))
-                    closes_60 = [float(k[4]) for k in rev_60]
-                    opens_60 = [float(k[1]) for k in rev_60]
-                    highs_60 = [float(k[2]) for k in rev_60]
-
-                    ema20_60 = closes_60[0]
-                    m20 = 2.0 / (len(closes_60) + 1)
-                    for c in closes_60[1:]:
-                        ema20_60 = (c - ema20_60) * m20 + ema20_60
-
-                    c_1h = closes_60[-1]
-                    o_1h = opens_60[-1]
-                    tf_1h_change_pct = round((c_1h - o_1h) / o_1h * 100, 2) if o_1h > 0 else 0.0
-
-                    # Detect 1H Upper Wick Blow-off / Rejection
-                    has_upper_wick_rejection = False
-                    if len(highs_60) >= 2:
-                        prev_body = abs(closes_60[-2] - opens_60[-2])
-                        prev_wick = highs_60[-2] - max(closes_60[-2], opens_60[-2])
-                        if prev_wick > max(0.00001, prev_body * 1.5):
-                            has_upper_wick_rejection = True
-
-                    if c_1h >= o_1h and c_1h >= ema20_60:
-                        tf_1h_trend = "BULL"
-                    elif c_1h < o_1h and (c_1h < ema20_60 or tf_1h_change_pct <= -1.2):
-                        tf_1h_trend = "DUMPING" if tf_1h_change_pct <= -1.5 else "BEAR"
-                    else:
-                        tf_1h_trend = "CHOP"
-
-                    # HTF Hard Conflict Check
-                    if not is_short:  # LONG
-                        if tf_1h_trend in ("DUMPING", "BEAR") or tf_1h_change_pct <= -1.0 or consecutive_red_15m >= 3 or has_upper_wick_rejection:
-                            htf_conflict = True
-                    else:  # SHORT
-                        if tf_1h_trend == "BULL" or tf_1h_change_pct >= 1.0:
-                            htf_conflict = True
-
-                # C. Process 5m klines (LTF Trigger Confirmation)
-                if klines_5 and len(klines_5) >= 5:
-                    rev_5 = list(reversed(klines_5))
-                    closes_5 = [float(k[4]) for k in rev_5]
-                    opens_5 = [float(k[1]) for k in rev_5]
-
-                    ema9_5 = closes_5[0]
-                    m9 = 2.0 / 10.0
-                    for c in closes_5[1:]:
-                        ema9_5 = (c - ema9_5) * m9 + ema9_5
-
-                    c_5 = closes_5[-1]
-                    o_5 = opens_5[-1]
-                    if c_5 >= ema9_5 and c_5 >= o_5:
-                        tf_5m_trend = "BULL"
-                    elif c_5 < ema9_5 and c_5 < o_5:
-                        tf_5m_trend = "BEAR"
-                    else:
-                        tf_5m_trend = "CHOP"
-
-                if not is_short:
-                    mtf_aligned = (tf_1h_trend == "BULL" and tf_5m_trend == "BULL" and not htf_conflict)
-                else:
-                    mtf_aligned = (tf_1h_trend in ("BEAR", "DUMPING") and tf_5m_trend == "BEAR" and not htf_conflict)
-
-                self.kline_cache[symbol] = (now, atr_pct, dist_to_vwap_bps, is_squeeze, tf_1h_trend, tf_1h_change_pct, tf_5m_trend, mtf_aligned, htf_conflict)
+                try:
+                    klines_5 = f_k5.result(timeout=4)
+                    self.cache_5m[symbol] = (now, klines_5)
+                except Exception as e:
+                    logger.debug(f"5M kline fetch failed for {symbol}: {e}")
 
             # Wait for parallel orderbook & trades to resolve
             book_res = f_book.result(timeout=4)
@@ -288,6 +233,7 @@ class MarketScanner:
 
             best_bid = bids[0][0]
             best_ask = asks[0][0]
+            current_price = (best_bid + best_ask) / 2.0
             spread_bps = (best_ask - best_bid) / best_bid * 10000
 
             bid_depth_20 = sum(p * q for p, q in bids[:20])
@@ -296,12 +242,10 @@ class MarketScanner:
             imbalance = (bid_depth_20 - ask_depth_20) / tot_depth if tot_depth > 0 else 0.0
 
             if is_short:
-                # For SHORT, wall of resistance sits in asks above best ask
                 max_ask_bucket = max(asks[:20], key=lambda x: x[0] * x[1])
                 wall_dist_pct = (max_ask_bucket[0] - best_ask) / best_ask * 100
                 wall_vol_usd = max_ask_bucket[0] * max_ask_bucket[1]
             else:
-                # For LONG, wall of support sits in bids below best bid
                 max_bid_bucket = max(bids[:20], key=lambda x: x[0] * x[1])
                 wall_dist_pct = (best_bid - max_bid_bucket[0]) / best_bid * 100
                 wall_vol_usd = max_bid_bucket[0] * max_bid_bucket[1]
@@ -311,6 +255,115 @@ class MarketScanner:
             sell_vol = sum(float(tr.get("size", 0)) * float(tr.get("price", 0)) for tr in trades if tr.get("side") == "Sell")
             tot_flow = buy_vol + sell_vol
             taker_buy_ratio = buy_vol / tot_flow if tot_flow > 0 else 0.5
+
+            # Process 15M klines (ATR, VWAP, Squeeze, consecutive red bars)
+            atr_pct = 1.0
+            dist_to_vwap_bps = 15.0
+            is_squeeze = False
+            consecutive_red_15m = 0
+            if klines_15 and len(klines_15) >= 10:
+                rev_klines = list(reversed(klines_15))
+                closes = [float(k[4]) for k in rev_klines]
+                opens = [float(k[1]) for k in rev_klines]
+                highs = [float(k[2]) for k in rev_klines]
+                lows = [float(k[3]) for k in rev_klines]
+
+                for c_b, o_b in zip(reversed(closes), reversed(opens)):
+                    if c_b < o_b:
+                        consecutive_red_15m += 1
+                    else:
+                        break
+
+                tr_list = []
+                for i in range(1, len(rev_klines)):
+                    h = highs[i]
+                    l = lows[i]
+                    prev_c = closes[i - 1]
+                    tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+                    tr_list.append(tr)
+
+                atr = sum(tr_list[-14:]) / min(14, len(tr_list)) if tr_list else (highs[-1] - lows[-1])
+                atr_pct = (atr / current_price) * 100 if current_price > 0 else 1.0
+
+                cum_vol = sum(float(k[5]) for k in rev_klines)
+                cum_turnover = sum(float(k[6]) for k in rev_klines)
+                vwap = cum_turnover / cum_vol if cum_vol > 0 else current_price
+                dist_to_vwap_bps = (current_price - vwap) / vwap * 10000
+
+                median_tr = sorted(tr_list)[len(tr_list) // 2] if tr_list else atr
+                prior_bars = tr_list[-5:-1] if len(tr_list) >= 5 else tr_list[:-1]
+                prior_avg_tr = sum(prior_bars) / len(prior_bars) if prior_bars else median_tr
+                is_compressed = prior_avg_tr <= median_tr * 0.90
+                is_expanding = tr_list[-1] >= median_tr * 1.10
+                is_squeeze = (is_compressed and is_expanding) or (tr_list[-1] <= median_tr * 0.70)
+
+            # 4H Dynamic Evaluation (Instant 0ms against real-time price)
+            tf_4h_trend = "NEUTRAL"
+            tf_4h_change_pct = 0.0
+            if cached_4h:
+                open_4h = cached_4h[1]
+                ema20_4h = cached_4h[2]
+                tf_4h_change_pct = round((current_price - open_4h) / open_4h * 100, 2) if open_4h > 0 else 0.0
+                if current_price >= open_4h and current_price >= ema20_4h:
+                    tf_4h_trend = "BULL"
+                elif current_price < open_4h and (current_price < ema20_4h or tf_4h_change_pct <= -2.0):
+                    tf_4h_trend = "BEAR"
+                else:
+                    tf_4h_trend = "CHOP"
+
+            # 1H Dynamic Evaluation (Instant 0ms against real-time price)
+            tf_1h_trend = "NEUTRAL"
+            tf_1h_change_pct = 0.0
+            has_upper_wick_rejection = False
+            if cached_1h:
+                open_1h = cached_1h[1]
+                ema20_1h = cached_1h[2]
+                has_upper_wick_rejection = cached_1h[3]
+                tf_1h_change_pct = round((current_price - open_1h) / open_1h * 100, 2) if open_1h > 0 else 0.0
+                if current_price >= open_1h and current_price >= ema20_1h:
+                    tf_1h_trend = "BULL"
+                elif current_price < open_1h and (current_price < ema20_1h or tf_1h_change_pct <= -1.2):
+                    tf_1h_trend = "DUMPING" if tf_1h_change_pct <= -1.5 else "BEAR"
+                else:
+                    tf_1h_trend = "CHOP"
+
+            # 5M Dynamic Evaluation (LTF Trigger Confirmation)
+            tf_5m_trend = "NEUTRAL"
+            if klines_5 and len(klines_5) >= 5:
+                rev_5 = list(reversed(klines_5))
+                closes_5 = [float(k[4]) for k in rev_5]
+                opens_5 = [float(k[1]) for k in rev_5]
+
+                ema9_5 = closes_5[0]
+                m9 = 2.0 / 10.0
+                for c in closes_5[1:]:
+                    ema9_5 = (c - ema9_5) * m9 + ema9_5
+
+                c_5 = current_price
+                o_5 = opens_5[-1]
+                if c_5 >= ema9_5 and c_5 >= o_5:
+                    tf_5m_trend = "BULL"
+                elif c_5 < ema9_5 and c_5 < o_5:
+                    tf_5m_trend = "BEAR"
+                else:
+                    tf_5m_trend = "CHOP"
+
+            # Multi-Timeframe Alignment & HTF Hard Conflict Filter
+            htf_conflict = False
+            if not is_short:  # LONG
+                if (tf_4h_trend == "BEAR" and tf_4h_change_pct <= -2.5) or \
+                   tf_1h_trend in ("DUMPING", "BEAR") or \
+                   tf_1h_change_pct <= -1.0 or \
+                   consecutive_red_15m >= 3 or \
+                   has_upper_wick_rejection:
+                    htf_conflict = True
+                mtf_aligned = (tf_1h_trend == "BULL" and tf_5m_trend == "BULL" and tf_4h_trend in ("BULL", "CHOP") and not htf_conflict)
+            else:  # SHORT
+                if (tf_4h_trend == "BULL" and tf_4h_change_pct >= 2.5) or \
+                   tf_1h_trend == "BULL" or \
+                   tf_1h_change_pct >= 1.0:
+                    htf_conflict = True
+                mtf_aligned = (tf_1h_trend in ("BEAR", "DUMPING") and tf_5m_trend == "BEAR" and tf_4h_trend in ("BEAR", "CHOP") and not htf_conflict)
 
             return ConfluenceFactors(
                 relative_strength_vs_btc_pct=rs_vs_btc_pct * 100,
@@ -323,6 +376,8 @@ class MarketScanner:
                 atr_15m_pct=atr_pct,
                 is_squeeze_breakout=is_squeeze,
                 funding_rate=funding_rate,
+                tf_4h_trend=tf_4h_trend,
+                tf_4h_change_pct=tf_4h_change_pct,
                 tf_1h_trend=tf_1h_trend,
                 tf_1h_change_pct=tf_1h_change_pct,
                 tf_5m_trend=tf_5m_trend,

@@ -102,8 +102,21 @@ class ConfluenceEngine:
                 score += 3.0
 
         # Factor 7: Multi-Timeframe Alignment & Hard Veto (Astra/Argon Gate)
-        if getattr(factors, "htf_conflict", False):
-            # HARD VETO: 1H is in a dump, reversal, or opposing trend!
+        htf_conflict = getattr(factors, "htf_conflict", False)
+        tf_4h = getattr(factors, "tf_4h_trend", "NEUTRAL")
+        tf_4h_chg = getattr(factors, "tf_4h_change_pct", 0.0)
+        tf_1h = getattr(factors, "tf_1h_trend", "NEUTRAL")
+        tf_1h_chg = getattr(factors, "tf_1h_change_pct", 0.0)
+
+        if direction == TradeDirection.LONG:
+            if (tf_4h == "BEAR" and tf_4h_chg <= -2.5) or tf_1h in ("DUMPING", "BEAR") or tf_1h_chg <= -1.0:
+                htf_conflict = True
+        else: # SHORT
+            if (tf_4h == "BULL" and tf_4h_chg >= 2.5) or tf_1h == "BULL" or tf_1h_chg >= 1.0:
+                htf_conflict = True
+
+        if htf_conflict:
+            # HARD VETO: 4H or 1H is in a dump, reversal, or opposing trend!
             # Immediate disqualification to prevent catching falling knives.
             return ConfluenceScore(
                 symbol=symbol,
@@ -115,9 +128,9 @@ class ConfluenceEngine:
             )
 
         if getattr(factors, "mtf_aligned", False):
-            # Perfect alignment across 5m, 15m, and 1h gives massive edge!
+            # Perfect alignment across 4h, 1h, 15m, and 5m gives massive edge!
             score += 20.0
-        elif getattr(factors, "tf_1h_trend", "") == ("BULL" if direction == TradeDirection.LONG else "BEAR"):
+        elif tf_1h == ("BULL" if direction == TradeDirection.LONG else "BEAR"):
             score += 10.0
 
         total_score = round(min(100.0, max(0.0, score)), 2)

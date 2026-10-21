@@ -180,35 +180,10 @@ class JevTraderEngine:
         max_entries_per_tick = 2  # Allow up to 2 rapid fills per tick if margin allows
         evaluated_candidates = []
 
-        for cand in candidates_to_evaluate:
+        # 1. Evaluate top candidates for MTF matrix and dashboard telemetry
+        for cand in candidates_to_evaluate[:10]:
             symbol, direction, rs_val, vol_val = cand[0], cand[1], cand[2], cand[3]
             fr_val = cand[4] if len(cand) > 4 else 0.0
-
-            if entries_this_tick >= max_entries_per_tick:
-                break
-
-            # Check existing position for Winning Pyramiding vs Duplicate skip
-            existing_pos = next((p for p in self.positions.active_positions.values() if p.symbol == symbol), None)
-            is_pyramid_candidate = False
-            if existing_pos:
-                # Winning Pyramiding Rule: only scale in if existing position is de-risked (BE locked) & layer 1
-                if existing_pos.direction == direction and existing_pos.is_be_locked and existing_pos.layer == 1:
-                    is_pyramid_candidate = True
-                else:
-                    continue
-
-            # Skip if cooldown is active
-            if self.store.is_cooldown_active(symbol, direction.value):
-                continue
-
-            # Anti-Clustering: max 3 open unhedged positions in same direction
-            same_dir_count = sum(1 for p in self.positions.active_positions.values() if p.direction == direction and not p.is_be_locked)
-            if same_dir_count >= self.max_same_direction:
-                continue
-
-            # Check if we still have available margin for another trade
-            if free_margin_est < self.config.min_available_margin_usd:
-                break
 
             # Fetch orderbook, CVD, squeeze, and funding telemetry
             is_short = (direction == TradeDirection.SHORT)
@@ -216,9 +191,9 @@ class JevTraderEngine:
             if not factors:
                 continue
 
-            # Compute 7-factor Confluence Score (0-100) with MTF Hard Veto
+            # Compute 7-factor Confluence Score (0-100) with 4H/1H MTF Hard Veto
             score_res = self.confluence.calculate_score(symbol, direction, factors)
-            logger.info(f"[EVAL {direction.value:<5}] {symbol:<12} | Score: {score_res.total_score:5.1f}/100 | RS: {factors.relative_strength_vs_btc_pct:+6.1f}% | 1H: {factors.tf_1h_trend} ({factors.tf_1h_change_pct:+.1f}%) | 5M: {factors.tf_5m_trend} | VETO: {factors.htf_conflict} | CVD Buy: {factors.taker_buy_ratio*100:4.1f}%")
+            logger.info(f"[EVAL {direction.value:<5}] {symbol:<12} | Score: {score_res.total_score:5.1f}/100 | RS: {factors.relative_strength_vs_btc_pct:+6.1f}% | 4H: {factors.tf_4h_trend} ({factors.tf_4h_change_pct:+.1f}%) | 1H: {factors.tf_1h_trend} ({factors.tf_1h_change_pct:+.1f}%) | 5M: {factors.tf_5m_trend} | VETO: {factors.htf_conflict} | CVD Buy: {factors.taker_buy_ratio*100:4.1f}%")
 
             evaluated_candidates.append({
                 "symbol": symbol,
@@ -230,6 +205,8 @@ class JevTraderEngine:
                 "wall_distance_pct": round(factors.wall_distance_pct, 2),
                 "funding_rate": round(getattr(factors, "funding_rate", 0.0) * 100, 4),
                 "is_squeeze_breakout": factors.is_squeeze_breakout,
+                "tf_4h_trend": getattr(factors, "tf_4h_trend", "NEUTRAL"),
+                "tf_4h_change_pct": getattr(factors, "tf_4h_change_pct", 0.0),
                 "tf_1h_trend": getattr(factors, "tf_1h_trend", "NEUTRAL"),
                 "tf_1h_change_pct": getattr(factors, "tf_1h_change_pct", 0.0),
                 "tf_5m_trend": getattr(factors, "tf_5m_trend", "NEUTRAL"),
@@ -239,9 +216,33 @@ class JevTraderEngine:
                 "price": float(tickers_dict.get(symbol, {}).get("lastPrice", 0.0))
             })
 
+            # 2. Gate Order Execution (Pyramiding or New Entry)
+            if entries_this_tick >= max_entries_per_tick:
+                continue
+
+            existing_pos = next((p for p in self.positions.active_positions.values() if p.symbol == symbol), None)
+            is_pyramid_candidate = False
+            if existing_pos:
+                if existing_pos.direction == direction and existing_pos.is_be_locked and existing_pos.layer == 1:
+                    is_pyramid_candidate = True
+                else:
+                    continue  # Already in position and not de-risked
+
+            # Check execution safety gates
+            if not is_pyramid_candidate:
+                if circuit_breaker_active:
+                    continue
+                if self.store.is_cooldown_active(symbol, direction.value):
+                    continue
+                same_dir_count = sum(1 for p in self.positions.active_positions.values() if p.direction == direction and not p.is_be_locked)
+                if same_dir_count >= self.max_same_direction:
+                    continue
+                if free_margin_est < self.config.min_available_margin_usd:
+                    continue
+
             # Pyramiding Scale-in on Free Runner (Layer 2)
             if is_pyramid_candidate and existing_pos:
-                if score_res.total_score >= 78.0:
+                if score_res.total_score >= 78.0 and not factors.htf_conflict:
                     curr_price = float(tickers_dict.get(symbol, {}).get("lastPrice", 0.0))
                     logger.info(f"[AI-CHECK-PYRAMID] High conviction ({score_res.total_score}/100). Calling {self.config.entry_model} for Layer 2 scale-in on {symbol}...")
                     decision = self.decisions.evaluate_entry(
@@ -274,11 +275,8 @@ class JevTraderEngine:
                         entries_this_tick += 1
                 continue
 
-            # Standard New Entry if score qualifies (>= 70)
-            if score_res.is_qualified:
-                if circuit_breaker_active:
-                    continue
-
+            # Standard New Entry if score qualifies (>= 70) and not vetoed
+            if score_res.is_qualified and not factors.htf_conflict:
                 curr_price = float(tickers_dict.get(symbol, {}).get("lastPrice", 0.0))
                 if curr_price <= 0:
                     continue
