@@ -130,16 +130,17 @@ class ConfluenceEngine:
                 is_high_conviction=False
             )
 
-        # Smart 1H Wick Handling (Never a Veto! Reward Wick Absorption or apply soft caution)
+        # Smart 1H Wick Handling (Sol 6.1: Reward Wick Absorption only when price is actively advancing)
         has_wick = getattr(factors, "has_upper_wick_rejection", False)
+        tf_1m = getattr(factors, "tf_1m_trend", "NEUTRAL")
         if has_wick:
             if direction == TradeDirection.LONG:
-                if taker_ratio >= 0.55:
-                    score += 8.0  # Wick Absorption: aggressive buyers breaking resistance
+                if taker_ratio >= 0.55 and tf_1m in ("BULL", "PUMPING"):
+                    score += 8.0  # Wick Absorption: aggressive buyers breaking resistance with price moving up!
                 else:
                     score -= 5.0  # Mild overhead caution
             else:
-                if taker_ratio <= 0.45:
+                if taker_ratio <= 0.45 and tf_1m in ("BEAR", "DUMPING"):
                     score += 8.0
                 else:
                     score -= 5.0
