@@ -138,8 +138,14 @@ class PositionManager:
                             reduce_only=True
                         )
                     except Exception as e:
-                        logger.error(f"Error closing TP2 runner for {pos.symbol}: {e}")
-                        tp2_success = False
+                        err_str = str(e).lower()
+                        if "110017" in str(e) or "zero" in err_str or "not modified" in err_str or "order qty" in err_str:
+                            logger.info(f"Position for {pos.symbol} already closed on Bybit exchange: {e}")
+                            tp2_success = True
+                        else:
+                            logger.error(f"Error closing TP2 runner for {pos.symbol}: {e}")
+                            tp2_success = False
+
 
                 if tp2_success or self.dry_run:
                     pos.status = TradeStatus.CLOSED_TP2
