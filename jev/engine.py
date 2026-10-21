@@ -193,7 +193,7 @@ class JevTraderEngine:
 
             # Compute 7-factor Confluence Score (0-100) with 4H/1H MTF Hard Veto
             score_res = self.confluence.calculate_score(symbol, direction, factors)
-            logger.info(f"[EVAL {direction.value:<5}] {symbol:<12} | Score: {score_res.total_score:5.1f}/100 | RS: {factors.relative_strength_vs_btc_pct:+6.1f}% | 4H: {factors.tf_4h_trend} ({factors.tf_4h_change_pct:+.1f}%) | 1H: {factors.tf_1h_trend} ({factors.tf_1h_change_pct:+.1f}%) | 5M: {factors.tf_5m_trend} | VETO: {factors.htf_conflict} | CVD Buy: {factors.taker_buy_ratio*100:4.1f}%")
+            logger.info(f"[EVAL {direction.value:<5}] {symbol:<12} | Score: {score_res.total_score:5.1f}/100 | RS: {factors.relative_strength_vs_btc_pct:+6.1f}% | [4H:{factors.tf_4h_trend} 1H:{factors.tf_1h_trend} 15M:{factors.tf_15m_trend} 5M:{factors.tf_5m_trend} 1M:{factors.tf_1m_trend}] | VETO: {factors.htf_conflict} | CVD Buy: {factors.taker_buy_ratio*100:4.1f}%")
 
             evaluated_candidates.append({
                 "symbol": symbol,
@@ -209,7 +209,9 @@ class JevTraderEngine:
                 "tf_4h_change_pct": getattr(factors, "tf_4h_change_pct", 0.0),
                 "tf_1h_trend": getattr(factors, "tf_1h_trend", "NEUTRAL"),
                 "tf_1h_change_pct": getattr(factors, "tf_1h_change_pct", 0.0),
+                "tf_15m_trend": getattr(factors, "tf_15m_trend", "NEUTRAL"),
                 "tf_5m_trend": getattr(factors, "tf_5m_trend", "NEUTRAL"),
+                "tf_1m_trend": getattr(factors, "tf_1m_trend", "NEUTRAL"),
                 "mtf_aligned": getattr(factors, "mtf_aligned", False),
                 "htf_conflict": getattr(factors, "htf_conflict", False),
                 "is_qualified": score_res.is_qualified,

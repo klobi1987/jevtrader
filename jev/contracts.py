@@ -52,8 +52,10 @@ class ConfluenceFactors:
     tf_4h_change_pct: float = 0.0        # Current 4h candle change %
     tf_1h_trend: str = "NEUTRAL"         # "BULL", "BEAR", "DUMPING", "REVERSAL"
     tf_1h_change_pct: float = 0.0        # Current 1h candle change %
+    tf_15m_trend: str = "NEUTRAL"        # "BULL", "BEAR", "CHOP"
     tf_5m_trend: str = "NEUTRAL"         # "BULL", "BEAR", "CURLING_UP"
-    mtf_aligned: bool = False            # True if 4h, 1h, 15m, 5m all align with direction
+    tf_1m_trend: str = "NEUTRAL"         # "BULL", "BEAR", "PUMPING", "DUMPING"
+    mtf_aligned: bool = False            # True if all timeframes align with direction
     htf_conflict: bool = False           # True if 4h or 1h is opposing or dumping against direction
 
 @dataclass

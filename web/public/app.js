@@ -334,10 +334,16 @@ function renderScannerFeed(candidates) {
 
     const h4Trend = c.tf_4h_trend || 'NEUTRAL';
     const h1Trend = c.tf_1h_trend || 'NEUTRAL';
+    const m15Trend = c.tf_15m_trend || 'NEUTRAL';
     const m5Trend = c.tf_5m_trend || 'NEUTRAL';
+    const m1Trend = c.tf_1m_trend || 'NEUTRAL';
+
     const h4Color = h4Trend === 'BULL' ? 'emerald-dot' : (h4Trend === 'BEAR' ? 'crimson-dot' : 'amber-dot');
     const h1Color = h1Trend === 'BULL' ? 'emerald-dot' : (h1Trend === 'DUMPING' || h1Trend === 'BEAR' ? 'crimson-dot' : 'amber-dot');
+    const m15Color = m15Trend === 'BULL' ? 'emerald-dot' : (m15Trend === 'BEAR' ? 'crimson-dot' : 'amber-dot');
     const m5Color = m5Trend === 'BULL' ? 'emerald-dot' : (m5Trend === 'BEAR' ? 'crimson-dot' : 'amber-dot');
+    const m1Color = (m1Trend === 'BULL' || m1Trend === 'PUMPING') ? 'emerald-dot' : (m1Trend === 'BEAR' || m1Trend === 'DUMPING' ? 'crimson-dot' : 'amber-dot');
+
     const h4Change = c.tf_4h_change_pct !== undefined ? (c.tf_4h_change_pct >= 0 ? '+' : '') + c.tf_4h_change_pct.toFixed(1) + '%' : '';
     const h1Change = c.tf_1h_change_pct !== undefined ? (c.tf_1h_change_pct >= 0 ? '+' : '') + c.tf_1h_change_pct.toFixed(1) + '%' : '';
     const hasVeto = c.htf_conflict === true;
@@ -359,10 +365,12 @@ function renderScannerFeed(candidates) {
           </div>
         </td>
         <td>
-          <div class="mtf-matrix-wrap" title="4H: ${h4Trend} ${h4Change} | 1H: ${h1Trend} ${h1Change} | 5M: ${m5Trend}">
+          <div class="mtf-matrix-wrap" title="4H: ${h4Trend} ${h4Change} | 1H: ${h1Trend} ${h1Change} | 15M: ${m15Trend} | 5M: ${m5Trend} | 1M: ${m1Trend}">
             <span class="mtf-badge"><span class="mtf-dot ${h4Color}"></span>4H</span>
             <span class="mtf-badge"><span class="mtf-dot ${h1Color}"></span>1H</span>
+            <span class="mtf-badge"><span class="mtf-dot ${m15Color}"></span>15M</span>
             <span class="mtf-badge"><span class="mtf-dot ${m5Color}"></span>5M</span>
+            <span class="mtf-badge"><span class="mtf-dot ${m1Color}"></span>1M</span>
             ${hasVeto ? '<span class="veto-tag">⛔ HTF VETO</span>' : ''}
           </div>
         </td>

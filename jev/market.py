@@ -26,7 +26,9 @@ class MarketScanner:
         self.cache_15m: Dict[str, Tuple[float, Any]] = {}
         # 5M cache: symbol -> (last_fetch_time, klines_5) (TTL = 30s)
         self.cache_5m: Dict[str, Tuple[float, Any]] = {}
-        self.pool = ThreadPoolExecutor(max_workers=14)
+        # 1M cache: symbol -> (last_fetch_time, klines_1) (TTL = 15s)
+        self.cache_1m: Dict[str, Tuple[float, Any]] = {}
+        self.pool = ThreadPoolExecutor(max_workers=16)
 
     def scan_universe(self) -> Tuple[MarketBreadthState, List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
@@ -160,6 +162,15 @@ class MarketScanner:
             else:
                 f_k5 = self.pool.submit(self.client.get_klines, symbol, "5", 12)
 
+            # 6. Check 1M Kline Cache (TTL = 15s)
+            cached_1m = self.cache_1m.get(symbol)
+            klines_1 = None
+            f_k1 = None
+            if cached_1m and (now - cached_1m[0] < 15.0):
+                klines_1 = cached_1m[1]
+            else:
+                f_k1 = self.pool.submit(self.client.get_klines, symbol, "1", 10)
+
             # Resolve any pending Kline futures
             if f_k4h:
                 try:
@@ -220,6 +231,13 @@ class MarketScanner:
                     self.cache_5m[symbol] = (now, klines_5)
                 except Exception as e:
                     logger.debug(f"5M kline fetch failed for {symbol}: {e}")
+
+            if f_k1:
+                try:
+                    klines_1 = f_k1.result(timeout=4)
+                    self.cache_1m[symbol] = (now, klines_1)
+                except Exception as e:
+                    logger.debug(f"1M kline fetch failed for {symbol}: {e}")
 
             # Wait for parallel orderbook & trades to resolve
             book_res = f_book.result(timeout=4)
@@ -327,6 +345,22 @@ class MarketScanner:
                 else:
                     tf_1h_trend = "CHOP"
 
+            # 15M Dynamic Trend Evaluation
+            tf_15m_trend = "NEUTRAL"
+            if klines_15 and len(klines_15) >= 5:
+                rev_15 = list(reversed(klines_15))
+                c_15_list = [float(k[4]) for k in rev_15]
+                ema20_15 = c_15_list[0]
+                m20_15 = 2.0 / (len(c_15_list) + 1)
+                for c in c_15_list[1:]:
+                    ema20_15 = (c - ema20_15) * m20_15 + ema20_15
+                if current_price >= ema20_15 and consecutive_red_15m == 0:
+                    tf_15m_trend = "BULL"
+                elif current_price < ema20_15 or consecutive_red_15m >= 2:
+                    tf_15m_trend = "BEAR"
+                else:
+                    tf_15m_trend = "CHOP"
+
             # 5M Dynamic Evaluation (LTF Trigger Confirmation)
             tf_5m_trend = "NEUTRAL"
             if klines_5 and len(klines_5) >= 5:
@@ -348,6 +382,28 @@ class MarketScanner:
                 else:
                     tf_5m_trend = "CHOP"
 
+            # 1M Dynamic Evaluation (Ultra-LTF Precision Timing)
+            tf_1m_trend = "NEUTRAL"
+            if klines_1 and len(klines_1) >= 4:
+                rev_1 = list(reversed(klines_1))
+                closes_1 = [float(k[4]) for k in rev_1]
+                opens_1 = [float(k[1]) for k in rev_1]
+                ema9_1 = closes_1[0]
+                m9_1 = 2.0 / 10.0
+                for c in closes_1[1:]:
+                    ema9_1 = (c - ema9_1) * m9_1 + ema9_1
+
+                c_1 = current_price
+                o_1 = opens_1[-1]
+                chg_1m_pct = (c_1 - o_1) / o_1 * 100 if o_1 > 0 else 0.0
+
+                if c_1 >= ema9_1 and c_1 >= o_1:
+                    tf_1m_trend = "PUMPING" if chg_1m_pct >= 0.4 else "BULL"
+                elif c_1 < ema9_1 and c_1 < o_1:
+                    tf_1m_trend = "DUMPING" if chg_1m_pct <= -0.4 else "BEAR"
+                else:
+                    tf_1m_trend = "CHOP"
+
             # Multi-Timeframe Alignment & HTF Hard Conflict Filter
             htf_conflict = False
             if not is_short:  # LONG
@@ -357,13 +413,13 @@ class MarketScanner:
                    consecutive_red_15m >= 3 or \
                    has_upper_wick_rejection:
                     htf_conflict = True
-                mtf_aligned = (tf_1h_trend == "BULL" and tf_5m_trend == "BULL" and tf_4h_trend in ("BULL", "CHOP") and not htf_conflict)
+                mtf_aligned = (tf_1h_trend == "BULL" and tf_15m_trend == "BULL" and tf_5m_trend == "BULL" and tf_1m_trend in ("BULL", "PUMPING") and tf_4h_trend in ("BULL", "CHOP") and not htf_conflict)
             else:  # SHORT
                 if (tf_4h_trend == "BULL" and tf_4h_change_pct >= 2.5) or \
                    tf_1h_trend == "BULL" or \
                    tf_1h_change_pct >= 1.0:
                     htf_conflict = True
-                mtf_aligned = (tf_1h_trend in ("BEAR", "DUMPING") and tf_5m_trend == "BEAR" and tf_4h_trend in ("BEAR", "CHOP") and not htf_conflict)
+                mtf_aligned = (tf_1h_trend in ("BEAR", "DUMPING") and tf_15m_trend == "BEAR" and tf_5m_trend == "BEAR" and tf_1m_trend in ("BEAR", "DUMPING") and tf_4h_trend in ("BEAR", "CHOP") and not htf_conflict)
 
             return ConfluenceFactors(
                 relative_strength_vs_btc_pct=rs_vs_btc_pct * 100,
@@ -380,7 +436,9 @@ class MarketScanner:
                 tf_4h_change_pct=tf_4h_change_pct,
                 tf_1h_trend=tf_1h_trend,
                 tf_1h_change_pct=tf_1h_change_pct,
+                tf_15m_trend=tf_15m_trend,
                 tf_5m_trend=tf_5m_trend,
+                tf_1m_trend=tf_1m_trend,
                 mtf_aligned=mtf_aligned,
                 htf_conflict=htf_conflict
             )
