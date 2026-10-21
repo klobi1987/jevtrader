@@ -1,0 +1,11 @@
+# Local data and secrets
+data/
+*.sqlite3
+*.log
+__pycache__/
+*.pyc
+.env
+zip.zip
+.codegraph/
+.omo/
+

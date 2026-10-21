@@ -1,0 +1,46 @@
+# JevTrader - Autonomous High-Frequency Crypto Perpetual Trading Engine
+# Configuration
+
+system:
+  env_file: "../.env"
+  db_path: "data/jevtrader.sqlite3"
+  log_level: "INFO"
+  hosts:
+    - "https://api.bytick.com"
+    - "https://api.bybit.com"
+
+portfolio:
+  max_active_positions: 2
+  # Chained compounding: max open unhedged risk is 5% total
+  risk_per_trade_pct: 0.040     # 4.0% default per trade (aggressive compounding)
+  max_risk_per_trade_pct: 0.050 # 5.0% on highest conviction (score >= 85)
+  min_sl_dist_pct: 0.006        # 0.60% min SL distance to prevent fee cannibalization
+  max_leverage_cap: 12.0        # Hard cap on isolated leverage
+  liquidation_buffer_pct: 0.025 # Min 2.5% distance from entry to liquidation price
+  exit_mode: "two_tier"         # "two_tier" (50% TP1 @ 1.5R + BE lock, 50% TP2 @ 2.5R) or "single" (100% @ 2.0R)
+
+regime:
+  # Market Breadth (% of pairs above 15m VWAP)
+  bull_breadth_threshold: 0.65   # > 65% -> Pure Bull Alpha (2 Longs)
+  bear_breadth_threshold: 0.35   # < 35% -> Blood in the Streets (2 Shorts)
+  # In between -> Chop / Sector Rotation (1 Long + 1 Short)
+
+confluence:
+  min_score_threshold: 70.0       # Min score (0-100) to trigger AI Decision check
+  high_conviction_threshold: 83.0 # Triggers 5.0% risk sizing
+  min_24h_turnover_usd: 5000000.0 # $5M min daily turnover for liquidity
+  max_spread_bps: 6.0             # Max 0.06% spread allowed
+
+models:
+  # OpenRouter Decisions API
+  decisions_url: "https://openrouter.ai/api/alpha/decisions"
+  entry_model: "perplexity/pplx-decider-v1.2"    # 390ms, top accuracy on absorption
+  entry_model_flow: "liquid/d1-ultra"            # 450ms, continuous dynamic flow
+  watchdog_model: "perplexity/pplx-decider-flash-v1.2" # 320ms, $0.000007 cost, 24/7 watchdog
+  min_entry_probability: 0.70    # AI must return >= 0.70 confidence
+  invalidation_threshold: 0.75   # Watchdog exits immediately if thesis invalidation >= 0.75
+
+cadence:
+  scan_interval_seconds: 10.0    # Universe scan every 10s
+  watchdog_interval_seconds: 3.0 # Open position watchdog check every 3s
+  post_only_timeout_seconds: 6.0 # Cancel maker order if not filled in 6s
