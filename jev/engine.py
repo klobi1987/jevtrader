@@ -118,11 +118,20 @@ class JevTraderEngine:
         # 3. Update & Watch Active Positions (TP1 scale-out, BE lock, Watchdog Ninja Cut)
         self.positions.update_and_watch(tickers_dict)
 
-        # 4. Check Chained Compounding Risk Capacity
+        # 4. Dynamic Risk & Margin Capacity (Continuous Trading while Balance Allows)
         # If an active position has locked Break-Even, its risk is 0, so slot is effectively free!
         unhedged_risk_count = sum(1 for p in self.positions.active_positions.values() if not p.is_be_locked)
         current_open_risk_usd = sum(p.initial_risk_usd for p in self.positions.active_positions.values() if not p.is_be_locked)
-        max_portfolio_risk_usd = equity * 0.08  # Hard cap: max 8.0% total portfolio risk
+        max_portfolio_risk_usd = equity * self.config.max_portfolio_risk_pct
+
+        # Used margin calculation: approximate used margin from active positions
+        used_margin_est = sum((p.remaining_qty * p.entry_price) / 8.0 for p in self.positions.active_positions.values())
+        free_margin_est = max(0.0, equity - used_margin_est)
+
+        if free_margin_est < self.config.min_available_margin_usd:
+            logger.info(f"Free margin ${free_margin_est:.2f} is below min ${self.config.min_available_margin_usd:.2f}. Holding open positions...")
+            time.sleep(self.config.watchdog_interval_seconds)
+            return
 
         if unhedged_risk_count >= self.config.max_active_positions:
             logger.info(f"Max active unhedged risk slots reached ({unhedged_risk_count}/{self.config.max_active_positions}). Monitoring active positions...")
@@ -133,22 +142,28 @@ class JevTraderEngine:
         candidates_to_evaluate: List[tuple] = [] # [(symbol, TradeDirection, rs, turnover)]
 
         if regime == MarketRegime.BULL_ALPHA:
-            # 2 Longs: Evaluate top 3 relative strength leaders
-            for t in top_longs[:3]:
+            # Bull Alpha: Evaluate top 6 relative strength leaders
+            for t in top_longs[:6]:
                 candidates_to_evaluate.append((t["symbol"], TradeDirection.LONG, t["rs_vs_btc"], t["turnover"]))
         elif regime == MarketRegime.BLOOD_STREETS:
-            # 2 Shorts: Evaluate top 3 relative weakness laggards
-            for t in top_shorts[:3]:
+            # Blood in the Streets: Evaluate top 6 relative weakness laggards
+            for t in top_shorts[:6]:
                 candidates_to_evaluate.append((t["symbol"], TradeDirection.SHORT, t["rs_vs_btc"], t["turnover"]))
         else: # CHOP_ROTATION
-            # Opportunistic Hedged: Top 2 Long leaders + Top 2 Short laggards
-            for t in top_longs[:2]:
+            # Opportunistic Hedged: Top 4 Long leaders + Top 4 Short laggards
+            for t in top_longs[:4]:
                 candidates_to_evaluate.append((t["symbol"], TradeDirection.LONG, t["rs_vs_btc"], t["turnover"]))
-            for t in top_shorts[:2]:
+            for t in top_shorts[:4]:
                 candidates_to_evaluate.append((t["symbol"], TradeDirection.SHORT, t["rs_vs_btc"], t["turnover"]))
 
         # 6. Evaluate Microstructure and Confluence for Candidates
+        entries_this_tick = 0
+        max_entries_per_tick = 2  # Allow up to 2 rapid fills per tick if margin allows
+
         for symbol, direction, rs_val, vol_val in candidates_to_evaluate:
+            if entries_this_tick >= max_entries_per_tick:
+                break
+
             # Skip if already holding a position in this symbol
             if any(p.symbol == symbol for p in self.positions.active_positions.values()):
                 continue
@@ -156,6 +171,10 @@ class JevTraderEngine:
             # Skip if cooldown is active
             if self.store.is_cooldown_active(symbol, direction.value):
                 continue
+
+            # Check if we still have available margin for another trade
+            if free_margin_est < self.config.min_available_margin_usd:
+                break
 
             # Fetch orderbook, CVD, and squeeze telemetry (passes is_short flag for ask wall)
             is_short = (direction == TradeDirection.SHORT)
@@ -180,7 +199,7 @@ class JevTraderEngine:
 
                 # Portfolio-level risk gate: check if adding this trade exceeds portfolio budget
                 if (current_open_risk_usd + draft_plan.risk_usd) > max_portfolio_risk_usd:
-                    logger.warning(f"Skipping {symbol}: new risk ${draft_plan.risk_usd:.2f} + current open risk ${current_open_risk_usd:.2f} exceeds 8% cap ${max_portfolio_risk_usd:.2f}")
+                    logger.warning(f"Skipping {symbol}: new risk ${draft_plan.risk_usd:.2f} + current open risk ${current_open_risk_usd:.2f} exceeds cap ${max_portfolio_risk_usd:.2f}")
                     continue
 
                 # Call OpenRouter Decisions API (~350ms, $0.000008)
@@ -203,9 +222,13 @@ class JevTraderEngine:
                     if pos:
                         self.positions.add_position(pos)
                         logger.info(f"[TRADE-ENTERED] {direction.value} {symbol} active! Entry: {pos.entry_price} | SL: {pos.stop_loss_price} | TP1: {pos.tp1_price} | TP2: {pos.tp2_price}")
-                        break # One new entry per cycle
+                        current_open_risk_usd += draft_plan.risk_usd
+                        margin_used_trade = draft_plan.position_notional_usd / max(1.0, draft_plan.leverage)
+                        free_margin_est = max(0.0, free_margin_est - margin_used_trade)
+                        entries_this_tick += 1
 
             time.sleep(0.1)
+
 
         # Sleep cadence before next scan
         time.sleep(self.config.scan_interval_seconds)

@@ -10,14 +10,16 @@ system:
     - "https://api.bybit.com"
 
 portfolio:
-  max_active_positions: 2
-  # Chained compounding: max open unhedged risk is 5% total
-  risk_per_trade_pct: 0.040     # 4.0% default per trade (aggressive compounding)
-  max_risk_per_trade_pct: 0.050 # 5.0% on highest conviction (score >= 85)
+  max_active_positions: 8        # Trade continuously as long as free margin allows (up to 8 positions)
+  risk_per_trade_pct: 0.035     # 3.5% default per trade
+  max_risk_per_trade_pct: 0.045 # 4.5% on highest conviction (score >= 83)
+  max_portfolio_risk_pct: 0.150 # Max 15% cumulative unhedged risk across portfolio
+  min_available_margin_usd: 8.0 # Keep trading while free margin > $8
   min_sl_dist_pct: 0.006        # 0.60% min SL distance to prevent fee cannibalization
-  max_leverage_cap: 12.0        # Hard cap on isolated leverage
+  max_leverage_cap: 10.0        # Hard cap on isolated leverage
   liquidation_buffer_pct: 0.025 # Min 2.5% distance from entry to liquidation price
   exit_mode: "two_tier"         # "two_tier" (50% TP1 @ 1.5R + BE lock, 50% TP2 @ 2.5R) or "single" (100% @ 2.0R)
+
 
 regime:
   # Market Breadth (% of pairs above 15m VWAP)

@@ -23,10 +23,13 @@ class JevConfig:
     max_active_positions: int
     risk_per_trade_pct: float
     max_risk_per_trade_pct: float
+    max_portfolio_risk_pct: float
+    min_available_margin_usd: float
     min_sl_dist_pct: float
     max_leverage_cap: float
     liquidation_buffer_pct: float
     exit_mode: str
+
     
     # Regime
     bull_breadth_threshold: float
@@ -87,11 +90,14 @@ def load_config(config_path: str = "config.yaml") -> JevConfig:
         hosts=system.get("hosts", ["https://api.bytick.com", "https://api.bybit.com"]),
         db_path=str((p.parent / system.get("db_path", "data/jevtrader.sqlite3")).resolve()),
         decisions_url=models.get("decisions_url", "https://openrouter.ai/api/alpha/decisions"),
-        max_active_positions=portfolio.get("max_active_positions", 2),
-        risk_per_trade_pct=portfolio.get("risk_per_trade_pct", 0.04),
-        max_risk_per_trade_pct=portfolio.get("max_risk_per_trade_pct", 0.05),
-        min_sl_dist_pct=portfolio.get("min_sl_dist_pct", 0.006),
-        max_leverage_cap=portfolio.get("max_leverage_cap", 12.0),
+        max_active_positions=int(portfolio.get("max_active_positions", 8)),
+        risk_per_trade_pct=float(portfolio.get("risk_per_trade_pct", 0.035)),
+        max_risk_per_trade_pct=float(portfolio.get("max_risk_per_trade_pct", 0.045)),
+        max_portfolio_risk_pct=float(portfolio.get("max_portfolio_risk_pct", 0.150)),
+        min_available_margin_usd=float(portfolio.get("min_available_margin_usd", 8.0)),
+        min_sl_dist_pct=float(portfolio.get("min_sl_dist_pct", 0.006)),
+        max_leverage_cap=float(portfolio.get("max_leverage_cap", 10.0)),
+
         liquidation_buffer_pct=portfolio.get("liquidation_buffer_pct", 0.025),
         exit_mode=portfolio.get("exit_mode", "two_tier"),
         bull_breadth_threshold=regime.get("bull_breadth_threshold", 0.65),
