@@ -34,11 +34,13 @@ confluence:
 models:
   # OpenRouter Decisions API
   decisions_url: "https://openrouter.ai/api/alpha/decisions"
-  entry_model: "perplexity/pplx-decider-v1.2"    # 390ms, top accuracy on absorption
-  entry_model_flow: "liquid/d1-ultra"            # 450ms, continuous dynamic flow
-  watchdog_model: "perplexity/pplx-decider-flash-v1.2" # 320ms, $0.000007 cost, 24/7 watchdog
+  entry_model: "liquid/d1-ultra"                 # 361ms, 0.815 Edge, optimal balance for breakout
+  entry_model_flow: "cloudflare/clef-flash"      # 713ms, 0.827 Edge, 0.735 Absorb
+  sniper_model: "microsoft/microsoft-decision-1" # 926ms, 0.947 Edge (high conviction >= 83.0)
+  watchdog_model: "liquid/d1-ultra"              # 361ms, 0.621 Absorb (Argon audit: avoids false Ninja Cuts)
   min_entry_probability: 0.70    # AI must return >= 0.70 confidence
   invalidation_threshold: 0.75   # Watchdog exits immediately if thesis invalidation >= 0.75
+
 
 cadence:
   scan_interval_seconds: 10.0    # Universe scan every 10s
