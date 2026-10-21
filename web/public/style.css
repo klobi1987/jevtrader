@@ -876,6 +876,41 @@ body {
 .text-bull { color: var(--emerald-neon); font-weight: 700; }
 .text-bear { color: var(--crimson-neon); font-weight: 700; }
 
+.gold-badge {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(217, 119, 6, 0.35));
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.6);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
+  font-weight: 700;
+  animation: pulseGold 2.5s infinite;
+}
+
+@keyframes pulseGold {
+  0%, 100% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.3); }
+  50% { box-shadow: 0 0 16px rgba(245, 158, 11, 0.6); }
+}
+
+.squeeze-tag {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(236, 72, 153, 0.15);
+  color: #f472b6;
+  border: 1px solid rgba(244, 114, 182, 0.4);
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.high-conviction-tag {
+  background: rgba(245, 158, 11, 0.15) !important;
+  color: #fbbf24 !important;
+  border: 1px solid rgba(251, 191, 36, 0.4) !important;
+  font-weight: 700 !important;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .app-header {

@@ -162,38 +162,47 @@ class JevTraderEngine:
         candidates_to_evaluate: List[tuple] = [] # [(symbol, TradeDirection, rs, turnover)]
 
         if regime == MarketRegime.BULL_ALPHA:
-            # Bull Alpha: Evaluate top 6 relative strength leaders
-            for t in top_longs[:6]:
-                candidates_to_evaluate.append((t["symbol"], TradeDirection.LONG, t["rs_vs_btc"], t["turnover"]))
+            # Bull Alpha: Evaluate top 8 relative strength & squeeze leaders
+            for t in top_longs[:8]:
+                candidates_to_evaluate.append((t["symbol"], TradeDirection.LONG, t["rs_vs_btc"], t["turnover"], t.get("funding_rate", 0.0)))
         elif regime == MarketRegime.BLOOD_STREETS:
-            # Blood in the Streets: Evaluate top 6 relative weakness laggards
-            for t in top_shorts[:6]:
-                candidates_to_evaluate.append((t["symbol"], TradeDirection.SHORT, t["rs_vs_btc"], t["turnover"]))
+            # Blood in the Streets: Evaluate top 8 relative weakness & long cascade laggards
+            for t in top_shorts[:8]:
+                candidates_to_evaluate.append((t["symbol"], TradeDirection.SHORT, t["rs_vs_btc"], t["turnover"], t.get("funding_rate", 0.0)))
         else: # CHOP_ROTATION
             # Opportunistic Hedged: Top 4 Long leaders + Top 4 Short laggards
             for t in top_longs[:4]:
-                candidates_to_evaluate.append((t["symbol"], TradeDirection.LONG, t["rs_vs_btc"], t["turnover"]))
+                candidates_to_evaluate.append((t["symbol"], TradeDirection.LONG, t["rs_vs_btc"], t["turnover"], t.get("funding_rate", 0.0)))
             for t in top_shorts[:4]:
-                candidates_to_evaluate.append((t["symbol"], TradeDirection.SHORT, t["rs_vs_btc"], t["turnover"]))
+                candidates_to_evaluate.append((t["symbol"], TradeDirection.SHORT, t["rs_vs_btc"], t["turnover"], t.get("funding_rate", 0.0)))
 
         # 6. Evaluate Microstructure and Confluence for Candidates
         entries_this_tick = 0
         max_entries_per_tick = 2  # Allow up to 2 rapid fills per tick if margin allows
         evaluated_candidates = []
 
-        for symbol, direction, rs_val, vol_val in candidates_to_evaluate:
+        for cand in candidates_to_evaluate:
+            symbol, direction, rs_val, vol_val = cand[0], cand[1], cand[2], cand[3]
+            fr_val = cand[4] if len(cand) > 4 else 0.0
+
             if entries_this_tick >= max_entries_per_tick:
                 break
 
-            # Skip if already holding a position in this symbol
-            if any(p.symbol == symbol for p in self.positions.active_positions.values()):
-                continue
+            # Check existing position for Winning Pyramiding vs Duplicate skip
+            existing_pos = next((p for p in self.positions.active_positions.values() if p.symbol == symbol), None)
+            is_pyramid_candidate = False
+            if existing_pos:
+                # Winning Pyramiding Rule: only scale in if existing position is de-risked (BE locked) & layer 1
+                if existing_pos.direction == direction and existing_pos.is_be_locked and existing_pos.layer == 1:
+                    is_pyramid_candidate = True
+                else:
+                    continue
 
             # Skip if cooldown is active
             if self.store.is_cooldown_active(symbol, direction.value):
                 continue
 
-            # Anti-Clustering: max 3 open positions in the same direction to prevent single-wick liquidation
+            # Anti-Clustering: max 3 open unhedged positions in same direction
             same_dir_count = sum(1 for p in self.positions.active_positions.values() if p.direction == direction and not p.is_be_locked)
             if same_dir_count >= self.max_same_direction:
                 continue
@@ -202,15 +211,15 @@ class JevTraderEngine:
             if free_margin_est < self.config.min_available_margin_usd:
                 break
 
-            # Fetch orderbook, CVD, and squeeze telemetry (passes is_short flag for ask wall)
+            # Fetch orderbook, CVD, squeeze, and funding telemetry
             is_short = (direction == TradeDirection.SHORT)
-            factors = self.scanner.fetch_microstructure_telemetry(symbol, rs_val, vol_val, is_short=is_short)
+            factors = self.scanner.fetch_microstructure_telemetry(symbol, rs_val, vol_val, is_short=is_short, funding_rate=fr_val)
             if not factors:
                 continue
 
-            # Compute 5-factor Confluence Score (0-100)
+            # Compute 6-factor Confluence Score (0-100)
             score_res = self.confluence.calculate_score(symbol, direction, factors)
-            logger.info(f"[EVAL {direction.value:<5}] {symbol:<12} | Score: {score_res.total_score:5.1f}/100 | RS: {factors.relative_strength_vs_btc_pct:+6.1f}% | CVD Buy: {factors.taker_buy_ratio*100:4.1f}% | Imb: {factors.orderbook_imbalance_top20:+5.2f}")
+            logger.info(f"[EVAL {direction.value:<5}] {symbol:<12} | Score: {score_res.total_score:5.1f}/100 | RS: {factors.relative_strength_vs_btc_pct:+6.1f}% | CVD Buy: {factors.taker_buy_ratio*100:4.1f}% | Imb: {factors.orderbook_imbalance_top20:+5.2f} | Funding: {fr_val*100:+.4f}%")
 
             evaluated_candidates.append({
                 "symbol": symbol,
@@ -220,11 +229,48 @@ class JevTraderEngine:
                 "cvd_buy_pct": round(factors.taker_buy_ratio * 100, 1),
                 "imbalance": round(factors.orderbook_imbalance_top20, 2),
                 "wall_distance_pct": round(factors.wall_distance_pct, 2),
+                "funding_rate": round(getattr(factors, "funding_rate", 0.0) * 100, 4),
+                "is_squeeze_breakout": factors.is_squeeze_breakout,
                 "is_qualified": score_res.is_qualified,
                 "price": float(tickers_dict.get(symbol, {}).get("lastPrice", 0.0))
             })
 
-            # If score qualifies (>= 70), call AI Decision Model!
+            # Pyramiding Scale-in on Free Runner (Layer 2)
+            if is_pyramid_candidate and existing_pos:
+                if score_res.total_score >= 78.0:
+                    curr_price = float(tickers_dict.get(symbol, {}).get("lastPrice", 0.0))
+                    logger.info(f"[AI-CHECK-PYRAMID] High conviction ({score_res.total_score}/100). Calling {self.config.entry_model} for Layer 2 scale-in on {symbol}...")
+                    decision = self.decisions.evaluate_entry(
+                        symbol=symbol,
+                        direction=direction,
+                        confluence=score_res,
+                        entry_price=curr_price,
+                        sl_price=existing_pos.stop_loss_price,
+                        tp1_price=existing_pos.tp2_price
+                    )
+                    if decision.is_approved:
+                        pyramid_qty = round(existing_pos.initial_qty * 0.5, 4)
+                        order_side = "Buy" if direction == TradeDirection.LONG else "Sell"
+                        if not self.dry_run:
+                            try:
+                                self.client.place_order(
+                                    symbol=symbol,
+                                    side=order_side,
+                                    order_type="Market",
+                                    qty=pyramid_qty
+                                )
+                                self.client.set_trading_stop(symbol=symbol, stop_loss=existing_pos.stop_loss_price)
+                            except Exception as e:
+                                logger.error(f"Error executing Layer 2 pyramid order for {symbol}: {e}")
+                                continue
+
+                        existing_pos.remaining_qty += pyramid_qty
+                        existing_pos.layer = 2
+                        logger.info(f"🔥 [PYRAMID-SCALEIN] Layer 2 active on {symbol}! Added {pyramid_qty} units. Stop-loss remains protected at {existing_pos.stop_loss_price}. Capital risk: $0.00!")
+                        entries_this_tick += 1
+                continue
+
+            # Standard New Entry if score qualifies (>= 70)
             if score_res.is_qualified:
                 curr_price = float(tickers_dict.get(symbol, {}).get("lastPrice", 0.0))
                 if curr_price <= 0:
@@ -258,8 +304,10 @@ class JevTraderEngine:
                     draft_plan.decision = decision
                     pos = self.execution.execute_entry(draft_plan)
                     if pos:
+                        pos.funding_rate = getattr(factors, "funding_rate", 0.0)
+                        pos.layer = 1
                         self.positions.add_position(pos)
-                        logger.info(f"[TRADE-ENTERED] {direction.value} {symbol} active! Entry: {pos.entry_price} | SL: {pos.stop_loss_price} | TP1: {pos.tp1_price} | TP2: {pos.tp2_price}")
+                        logger.info(f"[TRADE-ENTERED] {direction.value} {symbol} active! Entry: {pos.entry_price} | SL: {pos.stop_loss_price} | TP1: {pos.tp1_price} | TP2: {pos.tp2_price} | Funding: {pos.funding_rate*100:+.4f}%")
                         current_open_risk_usd += draft_plan.risk_usd
                         margin_used_trade = draft_plan.position_notional_usd / max(1.0, draft_plan.leverage)
                         free_margin_est = max(0.0, free_margin_est - margin_used_trade)
@@ -305,6 +353,8 @@ class JevTraderEngine:
                 "tp2_price": pos.tp2_price,
                 "initial_risk_usd": pos.initial_risk_usd,
                 "leverage": getattr(pos, "leverage", 10.0),
+                "layer": getattr(pos, "layer", 1),
+                "funding_rate": round(getattr(pos, "funding_rate", 0.0) * 100, 4),
                 "is_tp1_filled": pos.is_tp1_filled,
                 "is_be_locked": pos.is_be_locked,
                 "ratchet_level": pos.ratchet_level,

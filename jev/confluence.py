@@ -80,6 +80,29 @@ class ConfluenceEngine:
         if 0.5 <= factors.atr_15m_pct <= 3.5:
             score += 5.0
 
+        # Factor 6: Funding Squeeze Alpha (Bonus up to 15 pts)
+        fr = getattr(factors, "funding_rate", 0.0)
+        if direction == TradeDirection.LONG:
+            # Negative funding = shorts pay longs -> explosive short squeeze fuel
+            if fr <= -0.0010:
+                score += 15.0
+            elif fr <= -0.0005:
+                score += 10.0
+            elif fr <= -0.0002:
+                score += 6.0
+            elif fr < 0.0:
+                score += 3.0
+        else: # SHORT
+            # Positive funding = longs pay shorts -> long liquidation cascade fuel
+            if fr >= 0.0010:
+                score += 15.0
+            elif fr >= 0.0005:
+                score += 10.0
+            elif fr >= 0.0002:
+                score += 6.0
+            elif fr > 0.0001:
+                score += 3.0
+
         total_score = round(min(100.0, max(0.0, score)), 2)
         is_qualified = total_score >= self.min_threshold
         is_high = total_score >= self.high_conviction_threshold

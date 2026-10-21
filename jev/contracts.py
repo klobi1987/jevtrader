@@ -47,6 +47,7 @@ class ConfluenceFactors:
     dist_to_vwap_bps: float              # Basis points to 15m VWAP
     atr_15m_pct: float                   # Volatility %
     is_squeeze_breakout: bool            # True if breaking out of ATR compression
+    funding_rate: float = 0.0            # 8h funding rate (negative = shorts pay longs)
 
 @dataclass
 class ConfluenceScore:
@@ -97,6 +98,8 @@ class ActivePosition:
     tp2_price: float
     initial_risk_usd: float
     leverage: float = 10.0
+    layer: int = 1                       # Layer 1 = initial entry, Layer 2 = winning pyramid add-on
+    funding_rate: float = 0.0            # 8h funding rate at entry
     is_tp1_filled: bool = False
     is_be_locked: bool = False
     ratchet_level: int = 0

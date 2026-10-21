@@ -47,7 +47,9 @@ class DecisionsEngine:
                 "wall_dist_pct": f.wall_distance_pct,
                 "wall_vol_usd": f.wall_volume_usd,
                 "dist_to_vwap_bps": f.dist_to_vwap_bps,
-                "atr_15m_pct": f.atr_15m_pct
+                "atr_15m_pct": f.atr_15m_pct,
+                "is_squeeze_breakout": f.is_squeeze_breakout,
+                "funding_rate": getattr(f, "funding_rate", 0.0)
             },
             "geometry": {
                 "entry_price": entry_price,
@@ -56,10 +58,11 @@ class DecisionsEngine:
             }
         }
 
+        fr_val = getattr(f, "funding_rate", 0.0)
         questions = {
             "entry_edge": {
                 "type": "noul",
-                "instructions": f"Determine probability that price reaches TP1 before SL given {direction.value} momentum and orderbook wall."
+                "instructions": f"Determine probability that price reaches TP1 before SL given {direction.value} momentum, funding rate {fr_val:.6f}, squeeze breakout={f.is_squeeze_breakout}, and orderbook wall."
             },
             "wall_defense": {
                 "type": "noul",

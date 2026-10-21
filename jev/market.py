@@ -54,6 +54,7 @@ class MarketScanner:
             high_24h = float(t.get("highPrice24h", 0.0))
             low_24h = float(t.get("lowPrice24h", 0.0))
             midpoint = (high_24h + low_24h) / 2.0 if (high_24h + low_24h) > 0 else last_price
+            funding_rate = float(t.get("fundingRate", 0.0))
 
             tickers_dict[sym] = t
 
@@ -68,7 +69,8 @@ class MarketScanner:
                     "lastPrice": last_price,
                     "turnover": turnover,
                     "change24h": change,
-                    "rs_vs_btc": rs_vs_btc
+                    "rs_vs_btc": rs_vs_btc,
+                    "funding_rate": funding_rate
                 })
 
         breadth_pct = above_midpoint_count / total_usdt_pairs if total_usdt_pairs > 0 else 0.5
@@ -91,15 +93,25 @@ class MarketScanner:
             regime=regime
         )
 
-        # 4. Rank Candidates by Relative Strength vs BTC
-        valid_usdt_pairs.sort(key=lambda x: x["rs_vs_btc"], reverse=True)
-        top_longs = valid_usdt_pairs[:10]  # Top 10 strongest
-        top_shorts = valid_usdt_pairs[-10:] # Top 10 weakest (sorted ascending)
-        top_shorts.reverse()
+        # 4. Rank Candidates by Relative Strength vs BTC + Funding Squeeze Fuel
+        # Long candidates: highest RS + bonus if shorts are paying funding (negative funding rate)
+        top_longs_candidates = sorted(
+            valid_usdt_pairs,
+            key=lambda x: x["rs_vs_btc"] + (abs(x["funding_rate"]) * 50.0 if x["funding_rate"] < -0.0002 else 0.0),
+            reverse=True
+        )
+        top_longs = top_longs_candidates[:12]
+
+        # Short candidates: weakest RS + bonus if longs are paying funding (positive funding rate)
+        top_shorts_candidates = sorted(
+            valid_usdt_pairs,
+            key=lambda x: x["rs_vs_btc"] - (x["funding_rate"] * 50.0 if x["funding_rate"] > 0.0002 else 0.0)
+        )
+        top_shorts = top_shorts_candidates[:12]
 
         return breadth_state, top_longs, top_shorts, tickers_dict
 
-    def fetch_microstructure_telemetry(self, symbol: str, rs_vs_btc_pct: float, turnover_usd: float, is_short: bool = False) -> Optional[ConfluenceFactors]:
+    def fetch_microstructure_telemetry(self, symbol: str, rs_vs_btc_pct: float, turnover_usd: float, is_short: bool = False, funding_rate: float = 0.0) -> Optional[ConfluenceFactors]:
         """
         Pulls 50-level orderbook, recent trades concurrently in parallel (100ms total).
         Uses 3-minute in-memory cache for 15m klines to minimize network overhead.
@@ -147,7 +159,14 @@ class MarketScanner:
                     dist_to_vwap_bps = (current_price - vwap) / vwap * 10000
 
                     median_tr = sorted(tr_list)[len(tr_list) // 2] if tr_list else atr
-                    is_squeeze = tr_list[-1] <= median_tr * 0.85 if tr_list else False
+                    # Ground-Zero Squeeze Breakout:
+                    # Compression: prior 4 bars had tight range (volatility consolidation)
+                    # Expansion: current bar or last bar expands with directional volume
+                    prior_bars = tr_list[-5:-1] if len(tr_list) >= 5 else tr_list[:-1]
+                    prior_avg_tr = sum(prior_bars) / len(prior_bars) if prior_bars else median_tr
+                    is_compressed = prior_avg_tr <= median_tr * 0.90
+                    is_expanding = tr_list[-1] >= median_tr * 1.10
+                    is_squeeze = (is_compressed and is_expanding) or (tr_list[-1] <= median_tr * 0.70)
 
                 self.kline_cache[symbol] = (now, atr_pct, dist_to_vwap_bps, is_squeeze)
 
@@ -196,7 +215,8 @@ class MarketScanner:
                 wall_volume_usd=wall_vol_usd,
                 dist_to_vwap_bps=dist_to_vwap_bps,
                 atr_15m_pct=atr_pct,
-                is_squeeze_breakout=is_squeeze
+                is_squeeze_breakout=is_squeeze,
+                funding_rate=funding_rate
             )
         except Exception as e:
             logger.error(f"Error in parallel microstructure fetch for {symbol}: {e}")

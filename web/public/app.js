@@ -256,9 +256,11 @@ function renderActivePositions(positions) {
           <div class="pos-symbol-group">
             <span class="pos-symbol">${pos.symbol}</span>
             <span class="pos-direction-badge ${isLong ? 'long' : 'short'}">${pos.direction} ${pos.leverage ? pos.leverage + 'x' : '10x'}</span>
+            ${pos.layer === 2 ? '<span class="pos-direction-badge gold-badge">⚡ LAYER 2 PYRAMID</span>' : ''}
             <span class="empty-tag">Qty: ${pos.remaining_qty}</span>
             <span class="empty-tag">Entry: $${formatPrice(pos.entry_price)}</span>
             <span class="empty-tag">Mark: $${formatPrice(pos.current_price)}</span>
+            ${pos.funding_rate !== undefined ? `<span class="empty-tag ${pos.funding_rate < 0 ? 'emerald-text' : ''}">Funding: ${(pos.funding_rate >= 0 ? '+' : '')}${pos.funding_rate.toFixed(4)}%</span>` : ''}
           </div>
           <div class="pos-pnl-group">
             <div class="pos-pnl-val mono-font ${isProfit ? 'emerald-text' : 'crimson-text'}">
@@ -318,7 +320,7 @@ function renderActivePositions(positions) {
 function renderScannerFeed(candidates) {
   scannerCount.textContent = candidates.length;
   if (candidates.length === 0) {
-    scannerTbody.innerHTML = '<tr><td colspan="9" class="table-loading">Scanning universe for qualified momentum breakouts...</td></tr>';
+    scannerTbody.innerHTML = '<tr><td colspan="10" class="table-loading">Scanning universe for qualified momentum breakouts...</td></tr>';
     return;
   }
 
@@ -327,10 +329,15 @@ function renderScannerFeed(candidates) {
     const isLong = c.direction === 'LONG';
     const score = c.score || 0;
     const scoreFillClass = score >= 80 ? 'high' : (score >= 65 ? 'medium' : 'low');
+    const fr = c.funding_rate !== undefined ? c.funding_rate : 0.0;
+    const isSqueeze = c.is_squeeze_breakout || false;
 
     html += `
       <tr>
-        <td class="mono-font"><strong>${c.symbol}</strong></td>
+        <td class="mono-font">
+          <strong>${c.symbol}</strong>
+          ${isSqueeze ? '<span class="squeeze-tag">⚡ SQUEEZE</span>' : ''}
+        </td>
         <td><span class="pos-direction-badge ${isLong ? 'long' : 'short'}">${c.direction}</span></td>
         <td class="mono-font">$${formatPrice(c.price)}</td>
         <td>
@@ -341,6 +348,9 @@ function renderScannerFeed(candidates) {
             </div>
           </div>
         </td>
+        <td class="mono-font ${fr < 0 ? 'emerald-text' : (fr > 0.05 ? 'crimson-text' : '')}">
+          ${(fr >= 0 ? '+' : '')}${fr.toFixed(4)}%
+        </td>
         <td class="mono-font ${c.relative_strength >= 0 ? 'emerald-text' : 'crimson-text'}">
           ${(c.relative_strength >= 0 ? '+' : '')}${c.relative_strength.toFixed(1)}%
         </td>
@@ -350,8 +360,8 @@ function renderScannerFeed(candidates) {
         </td>
         <td class="mono-font">${c.wall_distance_pct.toFixed(2)}%</td>
         <td>
-          <span class="empty-tag ${c.is_qualified ? 'emerald-text' : ''}">
-            ${c.is_qualified ? 'QUALIFIED (≥70)' : 'EVALUATING'}
+          <span class="empty-tag ${score >= 80 ? 'high-conviction-tag' : (c.is_qualified ? 'emerald-text' : '')}">
+            ${score >= 80 ? '🔥 CONVICTION' : (c.is_qualified ? 'QUALIFIED (≥70)' : 'EVALUATING')}
           </span>
         </td>
       </tr>
