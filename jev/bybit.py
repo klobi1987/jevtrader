@@ -193,8 +193,8 @@ class BybitClient:
         data = {
             "category": "linear",
             "symbol": symbol,
-            "buyLeverage": str(buy_leverage),
-            "sellLeverage": str(sell_lev)
+            "buyLeverage": str(int(buy_leverage)),
+            "sellLeverage": str(int(sell_lev))
         }
         try:
             return self._request("POST", "/v5/position/set-leverage", data=data, is_private=True)
