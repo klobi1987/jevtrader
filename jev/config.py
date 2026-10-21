@@ -58,12 +58,16 @@ def load_config(config_path: str = "config.yaml") -> JevConfig:
     with open(p, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
         
-    env_file = raw.get("system", {}).get("env_file", "../.env")
-    env_path = (p.parent / env_file).resolve()
-    if env_path.exists():
-        load_dotenv(env_path)
+    # Check local jevtrader/.env first, then fallback to configured path (../.env)
+    local_env = p.parent / ".env"
+    configured_env = (p.parent / raw.get("system", {}).get("env_file", "../.env")).resolve()
+    if local_env.exists():
+        load_dotenv(local_env)
+    elif configured_env.exists():
+        load_dotenv(configured_env)
     else:
         load_dotenv()
+
         
     bybit_key = os.getenv("BYBIT_API_KEY", "")
     bybit_secret = os.getenv("BYBIT_API_SECRET", "")
