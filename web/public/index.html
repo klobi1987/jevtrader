@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JevTrader Apex — Autonomous Crypto Perpetual Cockpit</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-theme">
+  <!-- Cyber Background Ambient Glow -->
+  <div class="ambient-glow cyan-glow"></div>
+  <div class="ambient-glow purple-glow"></div>
+
+  <!-- Header Navigation Bar -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand-container">
+        <div class="brand-logo">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+            <polyline points="2 17 12 22 22 17"></polyline>
+            <polyline points="2 12 12 17 22 12"></polyline>
+          </svg>
+        </div>
+        <div class="brand-titles">
+          <h1 class="brand-name">JEVTRADER <span class="brand-badge">APEX</span></h1>
+          <span class="brand-subtitle">Autonomous High-Frequency Perps Engine</span>
+        </div>
+      </div>
+
+      <div class="status-pill live-pill" id="live-indicator">
+        <span class="pulsing-dot"></span>
+        <span id="system-status-text">LIVE BYBIT</span>
+      </div>
+
+      <div class="status-pill vps-pill">
+        <span class="server-icon">🖥️</span>
+        <span id="vps-address">VPS: 130.61.16.250</span>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div class="telemetry-badge">
+        <span class="badge-label">AI MODEL</span>
+        <span class="badge-val cyan-text" id="header-model-name">liquid/d1-ultra</span>
+      </div>
+      <div class="telemetry-badge">
+        <span class="badge-label">EXIT LOGIC</span>
+        <span class="badge-val emerald-text" id="header-exit-mode">Ratchet Trailing 🔒</span>
+      </div>
+      <div class="telemetry-badge">
+        <span class="badge-label">LAST TICK</span>
+        <span class="badge-val mono-font" id="header-last-tick">--:--:--</span>
+      </div>
+      <button class="sound-toggle-btn" id="sound-btn" title="Toggle Audio Chimes">
+        <span id="sound-icon">🔊</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Dashboard Container -->
+  <main class="dashboard-main">
+    <!-- Top KPI Stat Cards -->
+    <section class="kpi-grid">
+      <!-- 1. Equity Card -->
+      <div class="card kpi-card glassmorphism equity-card" id="kpi-equity-card">
+        <div class="card-header">
+          <span class="card-label">ACCOUNT EQUITY</span>
+          <span class="pnl-badge positive" id="kpi-pnl-badge">+0.00%</span>
+        </div>
+        <div class="kpi-value-row">
+          <span class="currency-symbol">$</span>
+          <span class="kpi-main-number mono-font" id="kpi-equity">107.00</span>
+          <span class="kpi-unit">USDT</span>
+        </div>
+        <div class="kpi-sub-row">
+          <div class="sub-stat">
+            <span class="sub-label">Free Margin:</span>
+            <span class="sub-val mono-font" id="kpi-free-margin">$107.00</span>
+          </div>
+          <div class="sub-stat">
+            <span class="sub-label">Used Margin:</span>
+            <span class="sub-val mono-font" id="kpi-used-margin">$0.00</span>
+          </div>
+        </div>
+        <div class="card-bottom-bar">
+          <div class="margin-bar-fill" id="margin-bar-fill" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <!-- 2. Market Regime & Breadth Card -->
+      <div class="card kpi-card glassmorphism regime-card" id="kpi-regime-card">
+        <div class="card-header">
+          <span class="card-label">MARKET REGIME & BREADTH</span>
+          <span class="regime-tag bull" id="kpi-regime-tag">BULL ALPHA</span>
+        </div>
+        <div class="kpi-value-row">
+          <span class="kpi-main-number mono-font" id="kpi-breadth-pct">75.6%</span>
+          <span class="kpi-unit">> 15m VWAP</span>
+        </div>
+        <div class="kpi-sub-row">
+          <div class="sub-stat">
+            <span class="sub-label">Breadth Ratio:</span>
+            <span class="sub-val mono-font" id="kpi-breadth-ratio">608 / 804 USDT Pairs</span>
+          </div>
+        </div>
+        <div class="card-bottom-bar">
+          <div class="breadth-gauge-fill" id="breadth-gauge-fill" style="width: 75.6%;"></div>
+        </div>
+      </div>
+
+      <!-- 3. Bitcoin Sentinel Card -->
+      <div class="card kpi-card glassmorphism btc-card" id="kpi-btc-card">
+        <div class="card-header">
+          <span class="card-label">BITCOIN SENTINEL (BTCUSDT)</span>
+          <span class="btc-badge positive" id="kpi-btc-change">+1.85%</span>
+        </div>
+        <div class="kpi-value-row">
+          <span class="currency-symbol">$</span>
+          <span class="kpi-main-number mono-font" id="kpi-btc-price">84,620.0</span>
+        </div>
+        <div class="kpi-sub-row">
+          <div class="sub-stat">
+            <span class="sub-label">15m Impulse:</span>
+            <span class="sub-val mono-font" id="kpi-btc-impulse">+0.24%</span>
+          </div>
+          <div class="sub-stat">
+            <span class="sub-label">Macro Bias:</span>
+            <span class="sub-val text-bull" id="kpi-btc-bias">EXPANSION</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Realized Velocity & Circuit Card -->
+      <div class="card kpi-card glassmorphism circuit-card" id="kpi-circuit-card">
+        <div class="card-header">
+          <span class="card-label">CAPITAL VELOCITY & SHIELD</span>
+          <span class="shield-badge active" id="kpi-shield-badge">SHIELD ACTIVE</span>
+        </div>
+        <div class="kpi-value-row">
+          <span class="currency-symbol">$</span>
+          <span class="kpi-main-number mono-font" id="kpi-realized-pnl">+0.00</span>
+          <span class="kpi-unit">Realized</span>
+        </div>
+        <div class="kpi-sub-row">
+          <div class="sub-stat">
+            <span class="sub-label">Active Slots:</span>
+            <span class="sub-val mono-font" id="kpi-active-slots">0 / 8 Max</span>
+          </div>
+          <div class="sub-stat">
+            <span class="sub-label">Circuit Breaker:</span>
+            <span class="sub-val text-emerald" id="kpi-circuit-status">0 Losses</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HERO SECTION: Active Positions & Ratchet Runner Visualizer -->
+    <section class="section-container">
+      <div class="section-header">
+        <div class="section-title-wrap">
+          <span class="section-icon">⚡</span>
+          <h2 class="section-title">ACTIVE POSITIONS & RATCHET RUNNERS</h2>
+        </div>
+        <div class="section-actions">
+          <span class="pill-note">TP1 at +1.5R locks Break-Even • Stepped Ratchet locks +1R at +2R</span>
+        </div>
+      </div>
+
+      <div id="active-positions-container" class="active-positions-list">
+        <!-- Rendered dynamically by app.js -->
+        <div class="radar-empty-state glassmorphism" id="empty-positions-state">
+          <div class="radar-circle-wrap">
+            <div class="radar-pulse"></div>
+            <div class="radar-sweep"></div>
+            <div class="radar-dot dot-1"></div>
+            <div class="radar-dot dot-2"></div>
+            <div class="radar-center-icon">🎯</div>
+          </div>
+          <div class="empty-state-text">
+            <h3>ACTIVE HUNTING IN PROGRESS</h3>
+            <p>Scanning 804 USDT perpetual pairs every 10s • Evaluating orderbook walls, CVD aggression & squeeze breakouts.</p>
+            <div class="empty-tags">
+              <span class="empty-tag">Anti-Clustering Shield: Active</span>
+              <span class="empty-tag">Min SL Distance: 0.60%</span>
+              <span class="empty-tag">Sub-Second AI Decision: Ready</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tabbed Content Workspace -->
+    <section class="section-container tabs-section">
+      <div class="tabs-nav-bar">
+        <button class="tab-btn active" data-tab="tab-scanner" id="tab-btn-scanner">
+          <span class="tab-icon">📡</span> LIVE SCANNER FEED (<span id="scanner-count">0</span>)
+        </button>
+        <button class="tab-btn" data-tab="tab-decisions" id="tab-btn-decisions">
+          <span class="tab-icon">🧠</span> AI DECISION LOG (<span id="decisions-count">0</span>)
+        </button>
+        <button class="tab-btn" data-tab="tab-history" id="tab-btn-history">
+          <span class="tab-icon">📜</span> TRADE HISTORY & AUDIT (<span id="history-count">0</span>)
+        </button>
+        <button class="tab-btn" data-tab="tab-settings" id="tab-btn-settings">
+          <span class="tab-icon">⚙️</span> RISK ENGINE SPECS
+        </button>
+      </div>
+
+      <!-- TAB 1: Live Scanner Feed -->
+      <div class="tab-panel active" id="tab-scanner">
+        <div class="table-card glassmorphism">
+          <div class="table-responsive">
+            <table class="data-table" id="scanner-table">
+              <thead>
+                <tr>
+                  <th>SYMBOL</th>
+                  <th>DIRECTION</th>
+                  <th>PRICE</th>
+                  <th>CONFLUENCE SCORE</th>
+                  <th>REL. STRENGTH (BTC)</th>
+                  <th>CVD BUY %</th>
+                  <th>BOOK IMBALANCE</th>
+                  <th>WALL DIST</th>
+                  <th>STATUS</th>
+                </tr>
+              </thead>
+              <tbody id="scanner-tbody">
+                <tr>
+                  <td colspan="9" class="table-loading">Awaiting live scanner telemetry...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: AI Decisions Feed -->
+      <div class="tab-panel" id="tab-decisions">
+        <div class="table-card glassmorphism">
+          <div class="table-responsive">
+            <table class="data-table" id="decisions-table">
+              <thead>
+                <tr>
+                  <th>TIME</th>
+                  <th>SYMBOL</th>
+                  <th>DIR</th>
+                  <th>MODEL</th>
+                  <th>EDGE PROB</th>
+                  <th>ABSORPTION</th>
+                  <th>LATENCY</th>
+                  <th>COST</th>
+                  <th>VERDICT</th>
+                </tr>
+              </thead>
+              <tbody id="decisions-tbody">
+                <tr>
+                  <td colspan="9" class="table-loading">Loading decision audit log...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: Closed Trades & PnL History -->
+      <div class="tab-panel" id="tab-history">
+        <div class="table-card glassmorphism">
+          <div class="table-responsive">
+            <table class="data-table" id="trades-table">
+              <thead>
+                <tr>
+                  <th>TRADE ID</th>
+                  <th>SYMBOL</th>
+                  <th>DIR</th>
+                  <th>ENTRY</th>
+                  <th>STOP LOSS</th>
+                  <th>TP1 (+1.5R)</th>
+                  <th>STATUS / EXIT REASON</th>
+                  <th>UPDATED</th>
+                </tr>
+              </thead>
+              <tbody id="trades-tbody">
+                <tr>
+                  <td colspan="8" class="table-loading">Loading trade records from SQLite store...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4: Risk Engine Settings -->
+      <div class="tab-panel" id="tab-settings">
+        <div class="specs-grid">
+          <div class="spec-card glassmorphism">
+            <h3 class="spec-title">⚡ Sizing & Compounding Rules</h3>
+            <ul class="spec-list">
+              <li><span class="spec-key">Base Risk Per Trade:</span> <span class="spec-val">3.5% ($3.75 on $107)</span></li>
+              <li><span class="spec-key">High Conviction Risk (Score ≥ 83):</span> <span class="spec-val">4.5%</span></li>
+              <li><span class="spec-key">Max Concurrent Unhedged:</span> <span class="spec-val">8 Positions</span></li>
+              <li><span class="spec-key">Portfolio Risk Cap:</span> <span class="spec-val">15.0% Cumulative</span></li>
+              <li><span class="spec-key">Isolated Leverage Cap:</span> <span class="spec-val">10.0x Max</span></li>
+              <li><span class="spec-key">Liquidation Buffer:</span> <span class="spec-val">≥ 2.50% from Entry</span></li>
+            </ul>
+          </div>
+
+          <div class="spec-card glassmorphism">
+            <h3 class="spec-title">🛡️ Circuit Breakers & Shields</h3>
+            <ul class="spec-list">
+              <li><span class="spec-key">Anti-Clustering Shield:</span> <span class="spec-val">Max 3 same direction</span></li>
+              <li><span class="spec-key">Loss Protection Circuit:</span> <span class="spec-val">15-min freeze on 3 consecutive losses</span></li>
+              <li><span class="spec-key">Min SL Distance Buffer:</span> <span class="spec-val">0.60% (prevents fee cannibalization)</span></li>
+              <li><span class="spec-key">Min Margin Velocity Floor:</span> <span class="spec-val">$8.00 Free Margin threshold</span></li>
+              <li><span class="spec-key">Watchdog Ninja Cut:</span> <span class="spec-val">Exits early at -0.2R on wall collapse</span></li>
+            </ul>
+          </div>
+
+          <div class="spec-card glassmorphism">
+            <h3 class="spec-title">🤖 AI Sub-Second Decision Matrix</h3>
+            <ul class="spec-list">
+              <li><span class="spec-key">Entry Evaluator:</span> <span class="spec-val cyan-text">liquid/d1-ultra (361ms)</span></li>
+              <li><span class="spec-key">24/7 Watchdog:</span> <span class="spec-val cyan-text">liquid/d1-ultra (0.6210 Absorb)</span></li>
+              <li><span class="spec-key">Confidence Gate:</span> <span class="spec-val">≥ 0.70 Action Probability</span></li>
+              <li><span class="spec-key">API Protocol:</span> <span class="spec-val">OpenRouter Alpha Decisions v1</span></li>
+              <li><span class="spec-key">Average Query Cost:</span> <span class="spec-val">$0.000014 / decision</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Notification Toast -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <footer class="app-footer">
+    <div class="footer-left">
+      <span>JevTrader Apex v10.16</span> • <span>Host: Bybit Linear USDT</span> • <span>Database: SQLite WAL</span>
+    </div>
+    <div class="footer-right">
+      <span class="footer-status-dot"></span> <span>24/7 PM2 Service: Active</span>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

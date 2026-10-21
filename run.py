@@ -35,6 +35,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", default=False, help="Run in dry-run simulation mode")
     parser.add_argument("--live", action="store_true", default=False, help="Run in live trading mode on Bybit")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to config.yaml")
+    parser.add_argument("--web", action="store_true", default=False, help="Also launch Web Dashboard server")
+    parser.add_argument("--web-port", type=int, default=8088, help="Port for Web Dashboard (default: 8088)")
 
     args = parser.parse_args()
 
@@ -49,6 +51,13 @@ def main():
     logger.info("=" * 70)
     logger.info(f"   STARTING JEVTRADER APEX - {mode_str}")
     logger.info("=" * 70)
+
+    if args.web:
+        import threading
+        from web.server import run_server
+        logger.info(f"Starting embedded Web Dashboard on port {args.web_port}...")
+        web_thread = threading.Thread(target=run_server, kwargs={"port": args.web_port}, daemon=True)
+        web_thread.start()
 
     try:
         config = load_config(args.config)

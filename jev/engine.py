@@ -179,6 +179,7 @@ class JevTraderEngine:
         # 6. Evaluate Microstructure and Confluence for Candidates
         entries_this_tick = 0
         max_entries_per_tick = 2  # Allow up to 2 rapid fills per tick if margin allows
+        evaluated_candidates = []
 
         for symbol, direction, rs_val, vol_val in candidates_to_evaluate:
             if entries_this_tick >= max_entries_per_tick:
@@ -197,7 +198,6 @@ class JevTraderEngine:
             if same_dir_count >= self.max_same_direction:
                 continue
 
-
             # Check if we still have available margin for another trade
             if free_margin_est < self.config.min_available_margin_usd:
                 break
@@ -211,6 +211,18 @@ class JevTraderEngine:
             # Compute 5-factor Confluence Score (0-100)
             score_res = self.confluence.calculate_score(symbol, direction, factors)
             logger.info(f"[EVAL {direction.value:<5}] {symbol:<12} | Score: {score_res.total_score:5.1f}/100 | RS: {factors.relative_strength_vs_btc_pct:+6.1f}% | CVD Buy: {factors.taker_buy_ratio*100:4.1f}% | Imb: {factors.orderbook_imbalance_top20:+5.2f}")
+
+            evaluated_candidates.append({
+                "symbol": symbol,
+                "direction": direction.value,
+                "score": round(score_res.total_score, 1),
+                "relative_strength": round(factors.relative_strength_vs_btc_pct, 1),
+                "cvd_buy_pct": round(factors.taker_buy_ratio * 100, 1),
+                "imbalance": round(factors.orderbook_imbalance_top20, 2),
+                "wall_distance_pct": round(factors.wall_distance_pct, 2),
+                "is_qualified": score_res.is_qualified,
+                "price": float(tickers_dict.get(symbol, {}).get("lastPrice", 0.0))
+            })
 
             # If score qualifies (>= 70), call AI Decision Model!
             if score_res.is_qualified:
@@ -255,7 +267,90 @@ class JevTraderEngine:
 
             time.sleep(0.1)
 
+        # Export live snapshot for the Web Dashboard UI
+        self._export_dashboard_state(equity, free_margin_est, used_margin_est, breadth_state, tickers_dict, evaluated_candidates)
 
         # Sleep cadence before next scan
         time.sleep(self.config.scan_interval_seconds)
+
+    def _export_dashboard_state(self, equity: float, free_margin: float, used_margin: float,
+                                breadth_state: Any, tickers_dict: Dict[str, Any],
+                                evaluated_candidates: List[Dict[str, Any]]):
+        """Atomically saves dashboard snapshot for the Web UI."""
+        import json
+        from pathlib import Path
+
+        pos_list = []
+        for pos in self.positions.active_positions.values():
+            is_long = (pos.direction == TradeDirection.LONG)
+            cp = pos.current_price
+            ep = pos.entry_price
+            if is_long:
+                unrealized_usd = pos.remaining_qty * (cp - ep)
+                unrealized_pct = ((cp - ep) / ep * 100) if ep > 0 else 0.0
+            else:
+                unrealized_usd = pos.remaining_qty * (ep - cp)
+                unrealized_pct = ((ep - cp) / ep * 100) if ep > 0 else 0.0
+
+            pos_list.append({
+                "trade_id": pos.trade_id,
+                "symbol": pos.symbol,
+                "direction": pos.direction.value,
+                "entry_price": pos.entry_price,
+                "current_price": pos.current_price,
+                "initial_qty": pos.initial_qty,
+                "remaining_qty": pos.remaining_qty,
+                "stop_loss_price": pos.stop_loss_price,
+                "tp1_price": pos.tp1_price,
+                "tp2_price": pos.tp2_price,
+                "initial_risk_usd": pos.initial_risk_usd,
+                "is_tp1_filled": pos.is_tp1_filled,
+                "is_be_locked": pos.is_be_locked,
+                "ratchet_level": pos.ratchet_level,
+                "highest_r_reached": round(pos.highest_r_reached, 2),
+                "status": pos.status.value,
+                "unrealized_pnl_usd": round(unrealized_usd, 4),
+                "unrealized_pnl_pct": round(unrealized_pct, 2)
+            })
+
+        now = time.time()
+        state = {
+            "timestamp": now,
+            "equity": round(equity, 2),
+            "free_margin": round(free_margin, 2),
+            "used_margin": round(used_margin, 2),
+            "total_realized_pnl": round(self.total_realized_pnl, 2),
+            "consecutive_losses": self.consecutive_losses,
+            "circuit_breaker_active": now < self.circuit_breaker_until,
+            "circuit_breaker_seconds_left": max(0, int(self.circuit_breaker_until - now)),
+            "regime": breadth_state.regime.value,
+            "breadth_pct": round(breadth_state.breadth_pct * 100, 1),
+            "pairs_above_vwap": breadth_state.pairs_above_vwap,
+            "total_pairs": breadth_state.total_pairs,
+            "btc_price": round(breadth_state.btc_price, 1),
+            "btc_change_24h_pct": round(breadth_state.btc_change_24h_pct * 100, 2),
+            "btc_impulse_15m": round(breadth_state.btc_impulse_15m * 100, 2),
+            "system": {
+                "mode": "DRY-RUN" if self.dry_run else "LIVE",
+                "entry_model": self.config.entry_model,
+                "watchdog_model": self.config.watchdog_model,
+                "exit_mode": self.config.exit_mode,
+                "max_positions": self.config.max_active_positions,
+                "risk_per_trade_pct": round(self.config.risk_per_trade_pct * 100, 1),
+                "max_same_direction": self.max_same_direction
+            },
+            "active_positions": pos_list,
+            "evaluated_candidates": evaluated_candidates
+        }
+
+        try:
+            db_dir = Path(self.config.db_path).parent
+            db_dir.mkdir(parents=True, exist_ok=True)
+            target = db_dir / "dashboard_state.json"
+            tmp = db_dir / "dashboard_state.json.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+            tmp.replace(target)
+        except Exception as e:
+            logger.debug(f"Could not export dashboard state: {e}")
 
