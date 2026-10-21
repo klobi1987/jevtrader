@@ -132,11 +132,10 @@ class JevTraderEngine:
 
         # Circuit breaker cooldown check
         now = time.time()
-        if now < self.circuit_breaker_until:
+        circuit_breaker_active = (now < self.circuit_breaker_until)
+        if circuit_breaker_active:
             rem = int(self.circuit_breaker_until - now)
-            logger.info(f"[CIRCUIT-BREAKER] Cooldown active ({rem}s remaining). Protecting capital...")
-            time.sleep(self.config.watchdog_interval_seconds)
-            return
+            logger.info(f"[CIRCUIT-BREAKER] Cooldown active ({rem}s remaining). Telemetry & scan active, new entries throttled.")
 
         # 4. Dynamic Risk & Margin Capacity (Continuous Trading while Balance Allows)
         # If an active position has locked Break-Even, its risk is 0, so slot is effectively free!
@@ -277,6 +276,9 @@ class JevTraderEngine:
 
             # Standard New Entry if score qualifies (>= 70)
             if score_res.is_qualified:
+                if circuit_breaker_active:
+                    continue
+
                 curr_price = float(tickers_dict.get(symbol, {}).get("lastPrice", 0.0))
                 if curr_price <= 0:
                     continue
