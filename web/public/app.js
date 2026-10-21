@@ -260,6 +260,7 @@ function renderActivePositions(positions) {
             <span class="empty-tag">Qty: ${pos.remaining_qty}</span>
             <span class="empty-tag">Entry: $${formatPrice(pos.entry_price)}</span>
             <span class="empty-tag">Mark: $${formatPrice(pos.current_price)}</span>
+            ${pos.liq_price ? `<span class="empty-tag ${pos.liq_buffer_pct >= 2.0 ? 'emerald-text' : 'crimson-text'}">🛡️ Liq: $${formatPrice(pos.liq_price)} (+${pos.liq_buffer_pct}% buffer)</span>` : ''}
             ${pos.funding_rate !== undefined ? `<span class="empty-tag ${pos.funding_rate < 0 ? 'emerald-text' : ''}">Funding: ${(pos.funding_rate >= 0 ? '+' : '')}${pos.funding_rate.toFixed(4)}%</span>` : ''}
           </div>
           <div class="pos-pnl-group">
@@ -276,7 +277,7 @@ function renderActivePositions(positions) {
         <div class="ratchet-track-container">
           <div class="ratchet-track-header">
             <span>RATCHET RUNNER TRAIL ENGINE</span>
-            <span>CURRENT SL: $${formatPrice(pos.stop_loss_price)} ${pos.is_be_locked ? '🔒 (RISK: $0.00)' : ''}</span>
+            <span>CURRENT SL: $${formatPrice(pos.stop_loss_price)} ${pos.is_be_locked ? '🔒 (BE LOCKED)' : ''} ${pos.liq_price ? `| EST. LIQ: $${formatPrice(pos.liq_price)} (+${pos.liq_buffer_pct}% safe)` : ''}</span>
           </div>
           <div class="ratchet-steps-bar">
             <!-- Node 1: Entry -->

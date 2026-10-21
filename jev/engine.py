@@ -347,6 +347,16 @@ class JevTraderEngine:
                 unrealized_usd = pos.remaining_qty * (ep - cp)
                 unrealized_pct = ((ep - cp) / ep * 100) if ep > 0 else 0.0
 
+            lev = getattr(pos, "leverage", 10.0)
+            mmr = 0.01
+            est_liq_dist = (1.0 / lev) - mmr if lev > 0 else 0.09
+            if is_long:
+                est_liq_price = ep * (1.0 - est_liq_dist)
+                liq_buffer_pct = ((pos.stop_loss_price - est_liq_price) / ep * 100) if ep > 0 else 0.0
+            else:
+                est_liq_price = ep * (1.0 + est_liq_dist)
+                liq_buffer_pct = ((est_liq_price - pos.stop_loss_price) / ep * 100) if ep > 0 else 0.0
+
             pos_list.append({
                 "trade_id": pos.trade_id,
                 "symbol": pos.symbol,
@@ -359,7 +369,9 @@ class JevTraderEngine:
                 "tp1_price": pos.tp1_price,
                 "tp2_price": pos.tp2_price,
                 "initial_risk_usd": pos.initial_risk_usd,
-                "leverage": getattr(pos, "leverage", 10.0),
+                "leverage": lev,
+                "liq_price": round(est_liq_price, 8),
+                "liq_buffer_pct": round(liq_buffer_pct, 2),
                 "layer": getattr(pos, "layer", 1),
                 "funding_rate": round(getattr(pos, "funding_rate", 0.0) * 100, 4),
                 "is_tp1_filled": pos.is_tp1_filled,
