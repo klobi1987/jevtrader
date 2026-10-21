@@ -18,7 +18,7 @@ portfolio:
   min_sl_dist_pct: 0.006        # 0.60% min SL distance to prevent fee cannibalization
   max_leverage_cap: 10.0        # Hard cap on isolated leverage
   liquidation_buffer_pct: 0.025 # Min 2.5% distance from entry to liquidation price
-  exit_mode: "two_tier"         # "two_tier" (50% TP1 @ 1.5R + BE lock, 50% TP2 @ 2.5R) or "single" (100% @ 2.0R)
+  exit_mode: "ratchet_trail"    # "ratchet_trail" (50% TP1 @ 1.5R + BE lock + Stepped Ratchet Trailing on runner)
 
 
 regime:

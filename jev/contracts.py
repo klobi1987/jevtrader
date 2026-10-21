@@ -21,6 +21,7 @@ class TradeStatus(str, Enum):
     CLOSED_TP2 = "CLOSED_TP2"
     CLOSED_BE = "CLOSED_BE"
     CLOSED_SL = "CLOSED_SL"
+    CLOSED_RATCHET = "CLOSED_RATCHET"
     CLOSED_WATCHDOG = "CLOSED_WATCHDOG"
     CANCELLED = "CANCELLED"
 
@@ -97,6 +98,8 @@ class ActivePosition:
     initial_risk_usd: float
     is_tp1_filled: bool = False
     is_be_locked: bool = False
+    ratchet_level: int = 0
+    highest_r_reached: float = 0.0
     entry_time: float = field(default_factory=time.time)
     order_link_id: str = ""
     status: TradeStatus = TradeStatus.OPEN

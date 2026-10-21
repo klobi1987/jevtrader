@@ -125,6 +125,18 @@ class StateStore:
             WHERE trade_id = ?
             """, (now_ms, trade_id))
 
+    def update_trade_sl(self, trade_id: str, new_sl: float, status_text: Optional[str] = None):
+        now_ms = int(time.time() * 1000)
+        with self._get_conn() as conn:
+            if status_text:
+                conn.execute("""
+                UPDATE trades SET stop_loss = ?, status = ?, updated_ms = ? WHERE trade_id = ?
+                """, (new_sl, status_text, now_ms, trade_id))
+            else:
+                conn.execute("""
+                UPDATE trades SET stop_loss = ?, updated_ms = ? WHERE trade_id = ?
+                """, (new_sl, now_ms, trade_id))
+
     def close_trade(self, trade_id: str, reason_status: str):
         now_ms = int(time.time() * 1000)
         with self._get_conn() as conn:
@@ -134,7 +146,7 @@ class StateStore:
 
     def get_open_trades(self) -> List[Dict[str, Any]]:
         with self._get_conn() as conn:
-            cur = conn.execute("SELECT * FROM trades WHERE status IN ('OPEN', 'TP1_HIT_BE_LOCKED')")
+            cur = conn.execute("SELECT * FROM trades WHERE status NOT LIKE 'CLOSED%' AND status != 'CANCELLED'")
             return [dict(r) for r in cur.fetchall()]
 
     def is_cooldown_active(self, symbol: str, direction: str) -> bool:

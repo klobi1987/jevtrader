@@ -33,21 +33,40 @@ class PositionManager:
             initial_qty = float(t["qty_entry"])
             remaining_qty = initial_qty * 0.5 if is_tp1_filled else initial_qty
 
+            entry_p = float(t["entry_price"])
+            sl_p = float(t["stop_loss"])
+            tp1_p = float(t["tp1"])
+
+            # Infer ratchet level from stop loss distance if BE locked
+            ratchet_lvl = 0
+            if is_be_locked:
+                one_r = abs(tp1_p - entry_p) / 1.5
+                if one_r > 0:
+                    locked_r = (sl_p - entry_p) / one_r if direction == TradeDirection.LONG else (entry_p - sl_p) / one_r
+                    if locked_r >= 0.8:
+                        ratchet_lvl = max(1, int(round(locked_r)))
+
+            try:
+                status_enum = TradeStatus(t["status"])
+            except (ValueError, KeyError):
+                status_enum = TradeStatus.TP1_HIT_BE_LOCKED if is_be_locked else TradeStatus.OPEN
+
             pos = ActivePosition(
                 trade_id=tid,
                 symbol=t["symbol"],
                 direction=direction,
-                entry_price=float(t["entry_price"]),
-                current_price=float(t["entry_price"]),
+                entry_price=entry_p,
+                current_price=entry_p,
                 initial_qty=initial_qty,
                 remaining_qty=remaining_qty,
-                stop_loss_price=float(t["stop_loss"]),
-                tp1_price=float(t["tp1"]),
+                stop_loss_price=sl_p,
+                tp1_price=tp1_p,
                 tp2_price=float(t["tp2"]),
                 initial_risk_usd=float(t["initial_risk_usd"]),
                 is_tp1_filled=is_tp1_filled,
                 is_be_locked=is_be_locked,
-                status=TradeStatus(t["status"])
+                ratchet_level=ratchet_lvl,
+                status=status_enum
             )
             self.active_positions[tid] = pos
         if self.active_positions:
@@ -61,8 +80,10 @@ class PositionManager:
         """
         Runs every cycle to monitor active positions:
         1. Checks TP1 trigger (+1.5R) -> Closes 50% and locks SL to Break-Even.
-        2. Checks TP2 trigger (+2.8R) -> Closes runner for full profit.
-        3. Calls 300ms Watchdog (pplx-decider-flash) -> Exits early if wall breaks (-0.2R Ninja Cut).
+        2. Ratchet Trailing -> After TP1, dynamically ratchets SL to +1.0R at +2.0R, +2.0R at +3.0R, etc.
+        3. Checks TP2 trigger (Runner Target) -> Closes remaining runner.
+        4. Checks Stop-Loss / Break-Even / Ratchet Hit -> Exits cleanly.
+        5. Calls 300ms Watchdog (liquid/d1-ultra) -> Exits early if wall breaks (-0.2R Ninja Cut).
         """
         closed_trade_ids = []
 
@@ -114,6 +135,7 @@ class PositionManager:
                             pos.is_tp1_filled = True
                             pos.is_be_locked = True
                             pos.stop_loss_price = be_price
+                            pos.ratchet_level = 0
                             pos.status = TradeStatus.TP1_HIT_BE_LOCKED
                             self.store.update_trade_be(pos.trade_id)
 
@@ -122,7 +144,41 @@ class PositionManager:
                                 self.on_pnl_realized(pos.trade_id, pnl, "TP1")
                             continue
 
-            # B. Check TP2 (Runner Target)
+            # B. Ratchet Trailing on Runner (Post-TP1)
+            if pos.is_tp1_filled:
+                one_r = abs(pos.tp1_price - pos.entry_price) / 1.5
+                if one_r > 0:
+                    current_r = (current_price - pos.entry_price) / one_r if is_long else (pos.entry_price - current_price) / one_r
+                    if current_r > pos.highest_r_reached:
+                        pos.highest_r_reached = current_r
+
+                    # Ratchet Stepping:
+                    # At >= +2.0R -> lock +1.0R (ratchet_level 1)
+                    # At >= +3.0R -> lock +2.0R (ratchet_level 2)
+                    # At >= +4.0R -> lock +3.0R (ratchet_level 3)
+                    target_ratchet_lvl = int(current_r) - 1
+                    if target_ratchet_lvl > pos.ratchet_level and target_ratchet_lvl >= 1:
+                        locked_r = float(target_ratchet_lvl)
+                        if is_long:
+                            new_sl = round(pos.entry_price + (locked_r * one_r), 8)
+                        else:
+                            new_sl = round(pos.entry_price - (locked_r * one_r), 8)
+
+                        sl_update_ok = True
+                        if not self.dry_run:
+                            try:
+                                self.client.set_trading_stop(symbol=pos.symbol, stop_loss=new_sl)
+                            except Exception as e:
+                                logger.error(f"Error ratcheting SL for {pos.symbol} to {new_sl}: {e}")
+                                sl_update_ok = False
+
+                        if sl_update_ok or self.dry_run:
+                            pos.stop_loss_price = new_sl
+                            pos.ratchet_level = target_ratchet_lvl
+                            self.store.update_trade_sl(pos.trade_id, new_sl, f"RATCHET_LOCK_{int(locked_r)}R")
+                            logger.info(f"🔥 [RATCHET-TRAIL] {pos.symbol} reached +{current_r:.2f}R! SL ratcheted to +{locked_r:.1f}R ({new_sl:.6f}). Profit locked!")
+
+            # C. Check TP2 (Runner Target)
             hit_tp2 = (current_price >= pos.tp2_price) if is_long else (current_price <= pos.tp2_price)
             if hit_tp2:
                 logger.info(f"[TP2-HIT / FULL-RUNNER] {pos.symbol} reached {current_price}! Closing remaining runner...")
@@ -146,7 +202,6 @@ class PositionManager:
                             logger.error(f"Error closing TP2 runner for {pos.symbol}: {e}")
                             tp2_success = False
 
-
                 if tp2_success or self.dry_run:
                     pos.status = TradeStatus.CLOSED_TP2
                     self.store.close_trade(pos.trade_id, "CLOSED_TP2")
@@ -156,17 +211,28 @@ class PositionManager:
                     closed_trade_ids.append(trade_id)
                     continue
 
-            # C. Check Stop-Loss / Break-Even Hit
+            # D. Check Stop-Loss / Break-Even / Ratchet Hit
             hit_sl = (current_price <= pos.stop_loss_price) if is_long else (current_price >= pos.stop_loss_price)
             if hit_sl:
-                status = "CLOSED_BE" if pos.is_be_locked else "CLOSED_SL"
-                logger.info(f"[{status}] {pos.symbol} touched SL level {pos.stop_loss_price}. Position closed.")
-                pos.status = TradeStatus.CLOSED_BE if pos.is_be_locked else TradeStatus.CLOSED_SL
+                if pos.ratchet_level >= 1:
+                    status = "CLOSED_RATCHET"
+                    desc = f"Ratchet Trailing SL (+{pos.ratchet_level}R locked)"
+                elif pos.is_be_locked:
+                    status = "CLOSED_BE"
+                    desc = "Break-Even SL"
+                else:
+                    status = "CLOSED_SL"
+                    desc = "Initial SL"
+
+                logger.info(f"[{status}] {pos.symbol} touched {desc} level {pos.stop_loss_price}. Position closed.")
+                pos.status = TradeStatus(status)
                 self.store.close_trade(pos.trade_id, status)
                 self.store.set_cooldown(pos.symbol, pos.direction.value, 600, f"Hit {status}")
 
                 if self.on_pnl_realized:
-                    if pos.is_be_locked:
+                    if pos.ratchet_level >= 1:
+                        pnl = pos.remaining_qty * abs(pos.stop_loss_price - pos.entry_price) - (pos.remaining_qty * pos.stop_loss_price * 0.0006)
+                    elif pos.is_be_locked:
                         pnl = 0.0
                     else:
                         pnl = -pos.initial_risk_usd
