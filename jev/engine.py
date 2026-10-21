@@ -70,6 +70,9 @@ class JevTraderEngine:
         self.running = False
         self.simulated_balance = 500.0 # Default starting balance for dry-run
         self.total_realized_pnl = 0.0
+        self.consecutive_losses = 0
+        self.circuit_breaker_until = 0.0
+        self.max_same_direction = 3  # Anti-clustering: max 3 unhedged positions in same direction
 
         # Rehydrate any existing open positions from SQLite database on startup
         self.positions.rehydrate_from_store()
@@ -77,11 +80,20 @@ class JevTraderEngine:
     def _on_pnl_realized(self, trade_id: str, pnl: float, reason: str):
         """Callback from PositionManager when a position reaches a profit/loss milestone."""
         self.total_realized_pnl += pnl
+        if pnl < -0.01:
+            self.consecutive_losses += 1
+            if self.consecutive_losses >= 3:
+                self.circuit_breaker_until = time.time() + 900.0 # 15 min protection
+                logger.warning("[CIRCUIT-BREAKER-ACTIVE] 3 consecutive losses hit! Throttling new entries for 15 min to prevent drawdown spiral.")
+        elif pnl > 0.01:
+            self.consecutive_losses = 0
+
         if self.dry_run:
             self.simulated_balance += pnl
             logger.info(f"[REALIZED-PNL] {reason} on {trade_id}: ${pnl:+.2f} | New Simulated Balance: ${self.simulated_balance:.2f} (Total PnL: ${self.total_realized_pnl:+.2f})")
         else:
             logger.info(f"[REALIZED-PNL] {reason} on {trade_id}: ${pnl:+.2f} (Session Total: ${self.total_realized_pnl:+.2f})")
+
 
     def start(self):
         """Starts the autonomous trading loop."""
@@ -117,6 +129,14 @@ class JevTraderEngine:
 
         # 3. Update & Watch Active Positions (TP1 scale-out, BE lock, Watchdog Ninja Cut)
         self.positions.update_and_watch(tickers_dict)
+
+        # Circuit breaker cooldown check
+        now = time.time()
+        if now < self.circuit_breaker_until:
+            rem = int(self.circuit_breaker_until - now)
+            logger.info(f"[CIRCUIT-BREAKER] Cooldown active ({rem}s remaining). Protecting capital...")
+            time.sleep(self.config.watchdog_interval_seconds)
+            return
 
         # 4. Dynamic Risk & Margin Capacity (Continuous Trading while Balance Allows)
         # If an active position has locked Break-Even, its risk is 0, so slot is effectively free!
@@ -171,6 +191,12 @@ class JevTraderEngine:
             # Skip if cooldown is active
             if self.store.is_cooldown_active(symbol, direction.value):
                 continue
+
+            # Anti-Clustering: max 3 open positions in the same direction to prevent single-wick liquidation
+            same_dir_count = sum(1 for p in self.positions.active_positions.values() if p.direction == direction and not p.is_be_locked)
+            if same_dir_count >= self.max_same_direction:
+                continue
+
 
             # Check if we still have available margin for another trade
             if free_margin_est < self.config.min_available_margin_usd:
