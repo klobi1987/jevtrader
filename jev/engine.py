@@ -304,6 +304,7 @@ class JevTraderEngine:
                 "tp1_price": pos.tp1_price,
                 "tp2_price": pos.tp2_price,
                 "initial_risk_usd": pos.initial_risk_usd,
+                "leverage": getattr(pos, "leverage", 10.0),
                 "is_tp1_filled": pos.is_tp1_filled,
                 "is_be_locked": pos.is_be_locked,
                 "ratchet_level": pos.ratchet_level,

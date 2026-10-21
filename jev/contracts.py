@@ -96,6 +96,7 @@ class ActivePosition:
     tp1_price: float
     tp2_price: float
     initial_risk_usd: float
+    leverage: float = 10.0
     is_tp1_filled: bool = False
     is_be_locked: bool = False
     ratchet_level: int = 0

@@ -255,7 +255,7 @@ function renderActivePositions(positions) {
         <div class="pos-card-header">
           <div class="pos-symbol-group">
             <span class="pos-symbol">${pos.symbol}</span>
-            <span class="pos-direction-badge ${isLong ? 'long' : 'short'}">${pos.direction} 8x</span>
+            <span class="pos-direction-badge ${isLong ? 'long' : 'short'}">${pos.direction} ${pos.leverage ? pos.leverage + 'x' : '10x'}</span>
             <span class="empty-tag">Qty: ${pos.remaining_qty}</span>
             <span class="empty-tag">Entry: $${formatPrice(pos.entry_price)}</span>
             <span class="empty-tag">Mark: $${formatPrice(pos.current_price)}</span>
