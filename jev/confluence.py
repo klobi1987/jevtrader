@@ -101,22 +101,25 @@ class ConfluenceEngine:
             elif fr > 0.0001:
                 score += 3.0
 
-        # Factor 7: Multi-Timeframe Alignment & Hard Veto (Astra/Argon Gate)
+        # Factor 7: Multi-Timeframe Matrix & Kinematic Inflection (Gemini 4 Argon Architecture)
         htf_conflict = getattr(factors, "htf_conflict", False)
         tf_4h = getattr(factors, "tf_4h_trend", "NEUTRAL")
         tf_4h_chg = getattr(factors, "tf_4h_change_pct", 0.0)
         tf_1h = getattr(factors, "tf_1h_trend", "NEUTRAL")
         tf_1h_chg = getattr(factors, "tf_1h_change_pct", 0.0)
+        tf_15m = getattr(factors, "tf_15m_trend", "NEUTRAL")
+        taker_ratio = getattr(factors, "taker_buy_ratio", 0.5)
 
         if direction == TradeDirection.LONG:
-            if (tf_4h == "BEAR" and tf_4h_chg <= -2.5) or tf_1h in ("DUMPING", "BEAR") or tf_1h_chg <= -1.0:
+            # HARD VETO ONLY on actual cascade crashes (IOSTUSDT waterfall protection)
+            if (tf_4h == "BEAR" and tf_4h_chg <= -2.5) or tf_1h == "DUMPING" or tf_1h_chg <= -2.0:
                 htf_conflict = True
         else: # SHORT
-            if (tf_4h == "BULL" and tf_4h_chg >= 2.5) or tf_1h == "BULL" or tf_1h_chg >= 1.0:
+            if (tf_4h == "BULL" and tf_4h_chg >= 2.5) or tf_1h == "PUMPING" or tf_1h_chg >= 2.0:
                 htf_conflict = True
 
         if htf_conflict:
-            # HARD VETO: 4H or 1H is in a dump, reversal, or opposing trend!
+            # HARD VETO: 4H or 1H is in an active cascade waterfall dump/pump!
             # Immediate disqualification to prevent catching falling knives.
             return ConfluenceScore(
                 symbol=symbol,
@@ -127,11 +130,37 @@ class ConfluenceEngine:
                 is_high_conviction=False
             )
 
+        # Smart 1H Wick Handling (Never a Veto! Reward Wick Absorption or apply soft caution)
+        has_wick = getattr(factors, "has_upper_wick_rejection", False)
+        if has_wick:
+            if direction == TradeDirection.LONG:
+                if taker_ratio >= 0.55:
+                    score += 8.0  # Wick Absorption: aggressive buyers breaking resistance
+                else:
+                    score -= 5.0  # Mild overhead caution
+            else:
+                if taker_ratio <= 0.45:
+                    score += 8.0
+                else:
+                    score -= 5.0
+
+        # Preduhitreni Ulaz (Anticipatory Entry) vs Full Alignment
+        is_anticipatory = getattr(factors, "is_anticipatory_entry", False)
         if getattr(factors, "mtf_aligned", False):
-            # Perfect alignment across 4h, 1h, 15m, and 5m gives massive edge!
+            # Perfect trend continuation across all 5 tiers
+            score += 20.0
+        elif is_anticipatory:
+            # Golden Anticipation: HTF permission + 15M base/pullback + 1M/5M momentum ignition
             score += 20.0
         elif tf_1h == ("BULL" if direction == TradeDirection.LONG else "BEAR"):
             score += 10.0
+        elif (tf_1h_chg > -1.2 if direction == TradeDirection.LONG else tf_1h_chg < 1.2):
+            score += 5.0  # HTF Permission granted (healthy pause)
+
+        # Discount Pullback Bonus on 15M
+        if direction == TradeDirection.LONG and tf_15m in ("CHOP", "BEAR"):
+            if 0 <= factors.dist_to_vwap_bps <= 50 and taker_ratio >= 0.55:
+                score += 8.0  # Coiled Spring discount near VWAP support
 
         total_score = round(min(100.0, max(0.0, score)), 2)
         is_qualified = total_score >= self.min_threshold

@@ -408,22 +408,37 @@ class MarketScanner:
                 else:
                     tf_1m_trend = "CHOP"
 
-            # Multi-Timeframe Alignment & HTF Hard Conflict Filter
+            # Multi-Timeframe Alignment & HTF Hard Conflict Filter (Gemini 4 Argon Kinematic Inflection)
             htf_conflict = False
+            is_anticipatory = False
             if not is_short:  # LONG
+                # HARD VETO ONLY on actual cascade crashes (IOSTUSDT waterfall protection)
                 if (tf_4h_trend == "BEAR" and tf_4h_change_pct <= -2.5) or \
-                   tf_1h_trend in ("DUMPING", "BEAR") or \
-                   tf_1h_change_pct <= -1.0 or \
-                   consecutive_red_15m >= 3 or \
-                   has_upper_wick_rejection:
+                   tf_1h_trend == "DUMPING" or \
+                   tf_1h_change_pct <= -2.0 or \
+                   consecutive_red_15m >= 5:
                     htf_conflict = True
+
+                # 1. Full Continuation Alignment across all 5 tiers
                 mtf_aligned = (tf_1h_trend == "BULL" and tf_15m_trend == "BULL" and tf_5m_trend == "BULL" and tf_1m_trend in ("BULL", "PUMPING") and tf_4h_trend in ("BULL", "CHOP") and not htf_conflict)
+
+                # 2. Anticipatory Ignition (Preduhitreni ulaz):
+                # HTF allows (no crash), 15M in healthy base/pullback near VWAP, and 1M/5M igniting with taker buyer flow
+                if not htf_conflict and tf_4h_trend in ("BULL", "CHOP") and tf_1h_change_pct > -1.5 and abs(dist_to_vwap_bps) <= 80:
+                    if tf_1m_trend in ("BULL", "PUMPING") and taker_buy_ratio >= 0.55:
+                        is_anticipatory = True
             else:  # SHORT
                 if (tf_4h_trend == "BULL" and tf_4h_change_pct >= 2.5) or \
-                   tf_1h_trend == "BULL" or \
-                   tf_1h_change_pct >= 1.0:
+                   tf_1h_trend == "PUMPING" or \
+                   tf_1h_change_pct >= 2.0 or \
+                   (consecutive_red_15m == 0 and tf_15m_trend == "BULL" and tf_1h_change_pct >= 2.0):
                     htf_conflict = True
+
                 mtf_aligned = (tf_1h_trend in ("BEAR", "DUMPING") and tf_15m_trend == "BEAR" and tf_5m_trend == "BEAR" and tf_1m_trend in ("BEAR", "DUMPING") and tf_4h_trend in ("BEAR", "CHOP") and not htf_conflict)
+
+                if not htf_conflict and tf_4h_trend in ("BEAR", "CHOP") and tf_1h_change_pct < 1.5 and abs(dist_to_vwap_bps) <= 80:
+                    if tf_1m_trend in ("BEAR", "DUMPING") and taker_buy_ratio <= 0.45:
+                        is_anticipatory = True
 
             return ConfluenceFactors(
                 relative_strength_vs_btc_pct=rs_vs_btc_pct * 100,
@@ -444,7 +459,9 @@ class MarketScanner:
                 tf_5m_trend=tf_5m_trend,
                 tf_1m_trend=tf_1m_trend,
                 mtf_aligned=mtf_aligned,
-                htf_conflict=htf_conflict
+                htf_conflict=htf_conflict,
+                has_upper_wick_rejection=has_upper_wick_rejection,
+                is_anticipatory_entry=is_anticipatory
             )
         except Exception as e:
             logger.error(f"Error in parallel microstructure fetch for {symbol}: {e}")

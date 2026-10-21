@@ -57,6 +57,8 @@ class ConfluenceFactors:
     tf_1m_trend: str = "NEUTRAL"         # "BULL", "BEAR", "PUMPING", "DUMPING"
     mtf_aligned: bool = False            # True if all timeframes align with direction
     htf_conflict: bool = False           # True if 4h or 1h is opposing or dumping against direction
+    has_upper_wick_rejection: bool = False # True if previous 1H bar has upper wick
+    is_anticipatory_entry: bool = False  # True if 15M base/pullback + 1M/5M momentum ignition (front-run)
 
 @dataclass
 class ConfluenceScore:
