@@ -187,6 +187,24 @@ class BybitClient:
 
         return self._request("POST", "/v5/position/trading-stop", data=data, is_private=True)
 
+    def set_leverage(self, symbol: str, buy_leverage: float, sell_leverage: Optional[float] = None) -> Dict[str, Any]:
+        """Set leverage for linear perpetual symbol."""
+        sell_lev = sell_leverage or buy_leverage
+        data = {
+            "category": "linear",
+            "symbol": symbol,
+            "buyLeverage": str(buy_leverage),
+            "sellLeverage": str(sell_lev)
+        }
+        try:
+            return self._request("POST", "/v5/position/set-leverage", data=data, is_private=True)
+        except RuntimeError as e:
+            # Code 110043 = "Set leverage not modified", which is safe to ignore
+            if "110043" in str(e):
+                logger.debug(f"Leverage for {symbol} already set to {buy_leverage}x")
+                return {"retCode": 0, "retMsg": "OK"}
+            raise
+
     def cancel_order(self, symbol: str, order_link_id: str) -> Dict[str, Any]:
         """Cancel a pending limit or post-only order."""
         return self._request("POST", "/v5/order/cancel", {
@@ -194,3 +212,4 @@ class BybitClient:
             "symbol": symbol,
             "orderLinkId": order_link_id
         }, is_private=True)
+

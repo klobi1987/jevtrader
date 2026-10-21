@@ -63,11 +63,25 @@ class JevTraderEngine:
             decisions=self.decisions,
             store=self.store,
             dry_run=self.dry_run,
-            exit_mode=config.exit_mode
+            exit_mode=config.exit_mode,
+            on_pnl_realized=self._on_pnl_realized
         )
 
         self.running = False
         self.simulated_balance = 500.0 # Default starting balance for dry-run
+        self.total_realized_pnl = 0.0
+
+        # Rehydrate any existing open positions from SQLite database on startup
+        self.positions.rehydrate_from_store()
+
+    def _on_pnl_realized(self, trade_id: str, pnl: float, reason: str):
+        """Callback from PositionManager when a position reaches a profit/loss milestone."""
+        self.total_realized_pnl += pnl
+        if self.dry_run:
+            self.simulated_balance += pnl
+            logger.info(f"[REALIZED-PNL] {reason} on {trade_id}: ${pnl:+.2f} | New Simulated Balance: ${self.simulated_balance:.2f} (Total PnL: ${self.total_realized_pnl:+.2f})")
+        else:
+            logger.info(f"[REALIZED-PNL] {reason} on {trade_id}: ${pnl:+.2f} (Session Total: ${self.total_realized_pnl:+.2f})")
 
     def start(self):
         """Starts the autonomous trading loop."""
@@ -96,22 +110,19 @@ class JevTraderEngine:
                 logger.warning("Wallet balance is 0 or unreadable. Checking fallback...")
                 equity = 100.0
 
-        # 2. Scan entire Bybit universe (912 pairs in ~1.6s)
-        breadth_state, top_longs, top_shorts = self.scanner.scan_universe()
+        # 2. Scan Bybit universe in a single batch call (~200ms)
+        breadth_state, top_longs, top_shorts, tickers_dict = self.scanner.scan_universe()
         regime = breadth_state.regime
-        logger.info(f"[REGIME: {regime.value}] Breadth: {breadth_state.breadth_pct*100:.1f}% above VWAP | BTC: ${breadth_state.btc_price:,.1f} ({breadth_state.btc_change_24h_pct*100:+.2f}%) | Equity: ${equity:,.2f}")
-
-        # Map tickers for fast lookup in position watcher
-        all_tickers = self.client.get_all_linear_tickers()
-        tickers_dict = {t.get("symbol"): t for t in all_tickers}
+        logger.info(f"[REGIME: {regime.value}] Breadth: {breadth_state.breadth_pct*100:.1f}% above VWAP ({breadth_state.pairs_above_vwap}/{breadth_state.total_pairs} USDT pairs) | BTC: ${breadth_state.btc_price:,.1f} ({breadth_state.btc_change_24h_pct*100:+.2f}%) | Equity: ${equity:,.2f}")
 
         # 3. Update & Watch Active Positions (TP1 scale-out, BE lock, Watchdog Ninja Cut)
         self.positions.update_and_watch(tickers_dict)
 
         # 4. Check Chained Compounding Risk Capacity
-        active_count = len(self.positions.active_positions)
         # If an active position has locked Break-Even, its risk is 0, so slot is effectively free!
         unhedged_risk_count = sum(1 for p in self.positions.active_positions.values() if not p.is_be_locked)
+        current_open_risk_usd = sum(p.initial_risk_usd for p in self.positions.active_positions.values() if not p.is_be_locked)
+        max_portfolio_risk_usd = equity * 0.08  # Hard cap: max 8.0% total portfolio risk
 
         if unhedged_risk_count >= self.config.max_active_positions:
             logger.info(f"Max active unhedged risk slots reached ({unhedged_risk_count}/{self.config.max_active_positions}). Monitoring active positions...")
@@ -119,7 +130,7 @@ class JevTraderEngine:
             return
 
         # 5. Determine Candidates to Hunt based on Dynamic Market Regime
-        candidates_to_evaluate: List[tuple] = [] # [(symbol, TradeDirection)]
+        candidates_to_evaluate: List[tuple] = [] # [(symbol, TradeDirection, rs, turnover)]
 
         if regime == MarketRegime.BULL_ALPHA:
             # 2 Longs: Evaluate top 3 relative strength leaders
@@ -146,14 +157,15 @@ class JevTraderEngine:
             if self.store.is_cooldown_active(symbol, direction.value):
                 continue
 
-            # Fetch orderbook, CVD, and squeeze telemetry
-            factors = self.scanner.fetch_microstructure_telemetry(symbol, rs_val, vol_val)
+            # Fetch orderbook, CVD, and squeeze telemetry (passes is_short flag for ask wall)
+            is_short = (direction == TradeDirection.SHORT)
+            factors = self.scanner.fetch_microstructure_telemetry(symbol, rs_val, vol_val, is_short=is_short)
             if not factors:
                 continue
 
             # Compute 5-factor Confluence Score (0-100)
             score_res = self.confluence.calculate_score(symbol, direction, factors)
-            logger.info(f"[EVAL {direction.value}] {symbol:<12} | Score: {score_res.total_score:5.1f}/100 | RS: {factors.relative_strength_vs_btc_pct:+6.1f}% | CVD Buy: {factors.taker_buy_ratio*100:4.1f}% | Imb: {factors.orderbook_imbalance_top20:+5.2f}")
+            logger.info(f"[EVAL {direction.value:<5}] {symbol:<12} | Score: {score_res.total_score:5.1f}/100 | RS: {factors.relative_strength_vs_btc_pct:+6.1f}% | CVD Buy: {factors.taker_buy_ratio*100:4.1f}% | Imb: {factors.orderbook_imbalance_top20:+5.2f}")
 
             # If score qualifies (>= 70), call AI Decision Model!
             if score_res.is_qualified:
@@ -164,6 +176,11 @@ class JevTraderEngine:
                 # Build draft plan to send geometry to AI
                 draft_plan = self.risk.build_trade_plan(symbol, direction, curr_price, score_res, equity)
                 if not draft_plan:
+                    continue
+
+                # Portfolio-level risk gate: check if adding this trade exceeds portfolio budget
+                if (current_open_risk_usd + draft_plan.risk_usd) > max_portfolio_risk_usd:
+                    logger.warning(f"Skipping {symbol}: new risk ${draft_plan.risk_usd:.2f} + current open risk ${current_open_risk_usd:.2f} exceeds 8% cap ${max_portfolio_risk_usd:.2f}")
                     continue
 
                 # Call OpenRouter Decisions API (~350ms, $0.000008)
@@ -192,3 +209,4 @@ class JevTraderEngine:
 
         # Sleep cadence before next scan
         time.sleep(self.config.scan_interval_seconds)
+

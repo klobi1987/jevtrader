@@ -106,8 +106,16 @@ class ExecutionEngine:
 
         # 4. LIVE Order Execution on Bybit
         try:
+            # Set calculated isolated leverage on exchange first
+            try:
+                self.client.set_leverage(symbol=symbol, buy_leverage=plan.leverage)
+                logger.info(f"[LIVE] Set leverage {plan.leverage}x for {symbol}")
+            except Exception as e:
+                logger.warning(f"Could not update leverage for {symbol}: {e}")
+
             logger.info(f"[LIVE] Sending {side} order for {adj_qty} {symbol} @ Market with attached SL {adj_sl} & TP2 {adj_tp2}...")
             res = self.client.place_order(
+
                 symbol=symbol,
                 side=side,
                 order_type="Market", # Market order ensures instant action on confirmed setup
